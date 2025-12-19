@@ -1,0 +1,1653 @@
+import { useEffect, useMemo, useState } from "react";
+import type { ChangeEvent, Dispatch, JSX, KeyboardEvent, ReactNode, SetStateAction } from "react";
+
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  CalendarDaysIcon,
+  CrownIcon,
+  ListChecksIcon,
+  SparklesIcon,
+  Trash2Icon,
+} from "lucide-react";
+import { listPrimaryEvents, getEventStartTimeHHMM, toISODate, createPrimaryEvent } from "@/lib/googleCalendar";
+import bun4 from "../bun4.jpg";
+import bun5 from "../bun5.jpg";
+import bun6 from "../bun6.jpg";
+import bun7 from "../bun7.jpg";
+import bun8 from "../bun8.jpg";
+import bun9 from "../bun9.jpg";
+import bun10 from "../bun10.jpg";
+import bun11 from "../bun11.jpg";
+import bun12 from "../bun12.jpg";
+import bun13 from "../bun13.jpg";
+import bun14 from "../bun14.jpg";
+import bun15 from "../bun15.jpg";
+import bun17 from "../bun17.jpg";
+import bun18 from "../bun18.jpg";
+import bun19 from "../bun19.jpg";
+import bun20 from "../bun20.jpg";
+import bun0 from "../bun.jpg";
+import bun1 from "../bun1.jpg";
+import bun2 from "../bun2.jpg";
+import bun3 from "../bun3.jpg";
+
+interface Task {
+  id: number;
+  title: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  status: "completed" | "inProgress" | "todo";
+  priority: "high" | "medium" | "low";
+  category: string;
+  note?: string;
+}
+
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
+type View = "monthly" | "weekly" | "daily" | "google" | "checklist";
+
+const sampleTasks: Task[] = [
+  { id: 1, title: "Học Tiếng Trung HSK3", date: "2025-08-13", time: "09:00", status: "completed", priority: "high", category: "Học ngoại ngữ" },
+  { id: 2, title: "Listening - IELTS", date: "2025-08-13", time: "11:00", status: "inProgress", priority: "medium", category: "Học ngoại ngữ" },
+  { id: 3, title: "Tập Yoga", date: "2025-08-14", time: "07:30", status: "completed", priority: "high", category: "Sức khỏe" },
+  { id: 4, title: "Nghiên cứu thị trường", date: "2025-08-14", time: "16:00", status: "todo", priority: "low", category: "Kinh doanh" },
+  { id: 5, title: "Design Kỹ năng thị giác", date: "2025-08-15", time: "14:00", status: "inProgress", priority: "medium", category: "Marketing" },
+  { id: 6, title: "Đọc sách Đầu tư", date: "2025-08-16", time: "20:00", status: "todo", priority: "low", category: "Đầu tư" },
+  { id: 7, title: "Họp CLB thiện nguyện", date: "2025-08-17", time: "17:00", status: "completed", priority: "medium", category: "CLB & tình nguyện" },
+  { id: 8, title: "Kinh tế vi mô", date: "2025-08-18", time: "08:00", status: "inProgress", priority: "high", category: "GPA năm 3" },
+  { id: 9, title: "Nấu ăn, nghỉ ngơi", date: "2025-08-18", time: "18:00", status: "todo", priority: "low", category: "Kỹ năng sống" },
+];
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+const TASKS_STORAGE_KEY = "planner_tasks_v1";
+const CHECKLIST_STORAGE_KEY = "planner_checklist_by_day_v1";
+const PROJECTS_STORAGE_KEY = "planner_projects_v1";
+const DEFAULT_CHECKLIST: ChecklistItem[] = [
+  { id: "1", text: "Ăn sáng đúng giờ", done: true },
+  { id: "2", text: "Uống đủ 1.5L nước", done: false },
+  { id: "3", text: "Skincare đều đặn", done: false },
+  { id: "4", text: "Tập thể dục 30ph", done: true },
+];
+
+const BUNS_DAILY = [bun4, bun5, bun6, bun7];
+const BUNS_GOOGLE = [bun8, bun9, bun10, bun11];
+const BUNS_CHECKLIST = [bun12, bun13, bun14, bun15];
+const BUNS_WEEKLY = [bun17, bun18, bun19, bun20];
+const BUNS_MONTHLY = [bun0, bun1, bun2, bun3];
+
+function BunStrip({ imgs }: { imgs: string[] }) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full">
+      {imgs.map((src, idx) => (
+        <div
+          key={src}
+          className="overflow-hidden rounded-2xl shadow ring-1 ring-pink-100 bg-white/80"
+        >
+          <img src={src} alt={`Cute bun ${idx + 1}`} className="w-full h-36 object-cover" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function startOfWeek(date: Date, weekStartsOnMonday = true) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0 Sun
+  const delta = weekStartsOnMonday ? (day === 0 ? -6 : 1 - day) : -day;
+  d.setDate(d.getDate() + delta);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function addDays(date: Date, days: number) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function prettyDate(dateISO: string) {
+  const d = new Date(`${dateISO}T00:00:00`);
+  return d.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function percentCompleted(tasks: Task[]) {
+  const total = tasks.length;
+  if (total === 0) return 0;
+  const done = tasks.filter((t) => t.status === "completed").length;
+  return Math.round((done / total) * 100);
+}
+
+function priorityPill(priority: Task["priority"]) {
+  if (priority === "high") return "bg-pink-200 text-pink-900";
+  if (priority === "medium") return "bg-yellow-200 text-yellow-900";
+  return "bg-emerald-200 text-emerald-900";
+}
+
+function SoftCard({ title, right, children }: { title: string; right?: JSX.Element; children: ReactNode }) {
+  return (
+    <Card className="rounded-2xl bg-white/80 backdrop-blur-sm shadow-sm ring-1 ring-pink-100">
+      <CardHeader className="py-3 px-4">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold text-slate-700">{title}</CardTitle>
+          {right}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0 pb-4 px-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+function SummaryChip({ label, value, tone }: { label: string; value: number; tone: "pink" | "yellow" | "blue" | "mint" }) {
+  const toneClass =
+    tone === "pink"
+      ? "bg-pink-100 ring-pink-200"
+      : tone === "yellow"
+      ? "bg-yellow-100 ring-yellow-200"
+      : tone === "blue"
+      ? "bg-sky-100 ring-sky-200"
+      : "bg-emerald-100 ring-emerald-200";
+  return (
+    <div className={`rounded-xl px-3 py-2 ring-1 ${toneClass}`}>
+      <div className="text-[11px] text-slate-600">{label}</div>
+      <div className="text-base font-semibold text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+function TaskTable({ tasks, onToggle }: { tasks: Task[]; onToggle: (id: number) => void }) {
+  return (
+    <ScrollArea className="h-52 pr-2">
+      <table className="min-w-full text-xs">
+        <thead>
+          <tr className="text-slate-500">
+            <th className="text-left p-2 pl-3">✓</th>
+            <th className="text-left p-2">Task</th>
+            <th className="text-left p-2">Type</th>
+            <th className="text-right p-2 pr-3">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tasks
+            .slice()
+            .sort((a, b) => a.time.localeCompare(b.time))
+            .map((t) => (
+              <tr key={t.id} className="border-b border-slate-100 hover:bg-pink-50/40 transition-colors">
+                <td className="p-2 pl-3 align-top">
+                  <Checkbox checked={t.status === "completed"} onCheckedChange={() => onToggle(t.id)} />
+                </td>
+                <td className="p-2 align-top">
+                  <div className="font-medium text-slate-700">{t.title}</div>
+                  <div className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityPill(t.priority)}`}>
+                    {t.priority}
+                  </div>
+                </td>
+                <td className="p-2 align-top text-slate-600">{t.category}</td>
+                <td className="p-2 pr-3 align-top text-right text-slate-600">{t.time}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </ScrollArea>
+  );
+}
+
+function MonthCalendar({
+  year,
+  month,
+  tasks,
+  selectedDate,
+  onSelectDate,
+}: {
+  year: number;
+  month: number;
+  tasks?: Task[];
+  selectedDate?: string;
+  onSelectDate?: (iso: string) => void;
+}) {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay = new Date(year, month, 1).getDay();
+  const offset = (firstDay + 6) % 7; // Monday = 0
+  const grid: number[] = [];
+  for (let i = 0; i < offset; i++) grid.push(0);
+  for (let d = 1; d <= daysInMonth; d++) grid.push(d);
+  while (grid.length % 7 !== 0) grid.push(0);
+  const weeks: number[][] = [];
+  for (let i = 0; i < grid.length; i += 7) weeks.push(grid.slice(i, i + 7));
+  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  return (
+    <div className="rounded-xl bg-white/70 ring-1 ring-slate-100 p-2">
+      <table className="w-full text-center text-[11px]">
+        <thead>
+          <tr>
+            {weekdays.map((d) => (
+              <th key={d} className="py-1 font-semibold text-slate-600">
+                {d}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {weeks.map((week, wi) => (
+            <tr key={wi}>
+              {week.map((day, di) => (
+                <td key={di} className="py-1">
+                  {day ? (
+                    <button
+                      className={`mx-auto flex h-7 w-7 items-center justify-center rounded-full ring-1 text-slate-700 transition-colors ${
+                        selectedDate === `${year}-${pad2(month + 1)}-${pad2(day)}`
+                          ? "bg-pink-100 ring-pink-200"
+                          : "bg-white/90 ring-pink-100 hover:bg-pink-50"
+                      }`}
+                      onClick={() =>
+                        onSelectDate?.(`${year}-${pad2(month + 1)}-${pad2(day)}`)
+                      }
+                    >
+                      {day}
+                    </button>
+                  ) : (
+                    <div className="h-7 w-7" />
+                  )}
+                  {day && tasks?.some((t) => t.date === `${year}-${pad2(month + 1)}-${pad2(day)}`) ? (
+                    <div className="mt-0.5 text-pink-400 text-[8px] leading-none">•</div>
+                  ) : null}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** -------------------- DAILY VIEW -------------------- */
+
+type Rank = "A" | "B" | "C" | "D" | "E";
+
+interface ChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+type ChecklistMap = Record<string, ChecklistItem[]>;
+
+function rankFromPct(pct: number): Rank {
+  if (pct >= 90) return "A";
+  if (pct >= 70) return "B";
+  if (pct >= 50) return "C";
+  if (pct >= 20) return "D";
+  return "E";
+}
+
+function rankBadgeClass(rank: Rank) {
+  if (rank === "A") return "bg-emerald-100 text-emerald-800 ring-emerald-200";
+  if (rank === "B") return "bg-sky-100 text-sky-800 ring-sky-200";
+  if (rank === "C") return "bg-amber-100 text-amber-800 ring-amber-200";
+  if (rank === "D") return "bg-orange-100 text-orange-800 ring-orange-200";
+  return "bg-rose-100 text-rose-800 ring-rose-200";
+}
+
+function DailySidebar({
+  monthYear,
+  startDayISO,
+  setStartDayISO,
+  processData,
+  checklist,
+  setChecklist,
+  tasks,
+  selectedDay,
+  setSelectedDay,
+}: {
+  monthYear: { year: number; monthIndex: number };
+  startDayISO: string;
+  setStartDayISO: (v: string) => void;
+  processData: Array<{ day: string; pct: number }>;
+  checklist: ChecklistItem[];
+  setChecklist: (items: ChecklistItem[]) => void;
+  tasks: Task[];
+  selectedDay: string;
+  setSelectedDay: (iso: string) => void;
+}) {
+  const [newItem, setNewItem] = useState("");
+  const selectedDayTasks = tasks.filter((t) => t.date === selectedDay);
+  const selectedDayPct = percentCompleted(selectedDayTasks);
+  const selectedDayRank = rankFromPct(selectedDayPct);
+
+  const addItem = () => {
+    const text = newItem.trim();
+    if (!text) return;
+    setChecklist([
+      ...checklist,
+      { id: crypto.randomUUID(), text, done: false },
+    ]);
+    setNewItem("");
+  };
+
+  return (
+    <div className="space-y-4">
+      <SoftCard
+        title="DAILY PLAN"
+        right={<SparklesIcon className="h-4 w-4 text-pink-500" />}
+      >
+        <div className="space-y-3">
+          <div className="rounded-xl bg-white/70 ring-1 ring-slate-100 p-4">
+            <div className="text-[11px] text-slate-500">Month</div>
+            <div className="text-sm font-semibold text-slate-700">
+              {pad2(monthYear.monthIndex + 1)}/{monthYear.year}
+            </div>
+            <div className="mt-2">
+              <MonthCalendar
+                year={monthYear.year}
+                month={monthYear.monthIndex}
+                tasks={tasks}
+                selectedDate={selectedDay}
+                onSelectDate={(iso) => {
+                  setSelectedDay(iso);
+                  setStartDayISO(iso);
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-white/70 ring-1 ring-slate-100 p-4 space-y-3">
+            <div className="text-[11px] text-slate-500">Start Day</div>
+            <Input
+              value={startDayISO}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setStartDayISO(e.target.value)}
+              type="date"
+              className="mt-2 h-9 rounded-lg"
+            />
+            <div className="text-[11px] text-slate-600">
+              {prettyDate(startDayISO)}
+            </div>
+            <div className="mt-2 rounded-lg bg-white/80 ring-1 ring-slate-100 px-3 py-2">
+              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                <span>Selected day rank</span>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${rankBadgeClass(selectedDayRank)}`}>
+                  <CrownIcon className="h-3 w-3" />
+                  Rank {selectedDayRank}
+                </span>
+              </div>
+              <div className="text-xs text-slate-600 mt-1">Completed: {selectedDayPct}%</div>
+            </div>
+          </div>
+        </div>
+      </SoftCard>
+
+      <SoftCard title="Task Process">
+        <div className="h-36">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={processData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="day" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} />
+              <Tooltip />
+              <Bar dataKey="pct" radius={[8, 8, 0, 0]}>
+                {processData.map((_, i) => (
+                  <Cell key={i} fill={["#AED9E0", "#F9E79F", "#FFC5D0", "#C7F9CC", "#CDB4DB", "#FFD6A5", "#BDE0FE"][i % 7]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </SoftCard>
+
+      <SoftCard title="Checklist" right={<ListChecksIcon className="h-4 w-4 text-slate-500" />}>
+        <div className="flex gap-2">
+          <Input
+            value={newItem}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewItem(e.target.value)}
+            placeholder="Add new checklist item..."
+            className="h-9 rounded-xl bg-white/80"
+            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+              if (e.key === "Enter") addItem();
+            }}
+          />
+          <Button
+            onClick={addItem}
+            className="rounded-xl bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+          >
+            Add
+          </Button>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {checklist.length === 0 ? (
+            <div className="text-xs text-slate-500">No items yet. Add one above ✨</div>
+          ) : (
+            checklist.map((item) => (
+              <div key={item.id} className="flex items-center gap-2 rounded-xl bg-white/70 ring-1 ring-slate-100 px-3 py-2">
+                <Checkbox
+                  checked={item.done}
+                  onCheckedChange={() => {
+                    setChecklist(
+                      checklist.map((x) => (x.id === item.id ? { ...x, done: !x.done } : x)),
+                    );
+                  }}
+                />
+                <div className={`flex-1 text-sm ${item.done ? "line-through text-slate-400" : "text-slate-700"}`}>{item.text}</div>
+                <button
+                  className="rounded-lg p-1 text-slate-400 hover:text-slate-700"
+                  onClick={() => setChecklist(checklist.filter((x) => x.id !== item.id))}
+                  aria-label="Remove"
+                >
+                  <Trash2Icon className="h-4 w-4" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </SoftCard>
+    </div>
+  );
+}
+
+function DailySpread({
+  weekDates,
+  tasks,
+  onToggle,
+}: {
+  weekDates: string[]; // 7 ISO dates
+  tasks: Task[];
+  onToggle: (id: number) => void;
+}) {
+  const dayNames = weekDates.map((iso) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" }),
+  );
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      {weekDates.map((iso, idx) => {
+        const dayTasks = tasks.filter((t) => t.date === iso);
+        const completed = dayTasks.filter((t) => t.status === "completed").length;
+        const total = dayTasks.length;
+        const inProgress = Math.max(total - completed, 0);
+        const pct = percentCompleted(dayTasks);
+        const dayRank = rankFromPct(pct);
+
+        return (
+          <Card
+            key={iso}
+            className="rounded-2xl bg-white/80 backdrop-blur-sm shadow-sm ring-1 ring-slate-100"
+          >
+            <CardHeader className="pb-2 px-4">
+              <div className="flex items-center justify-between">
+                <div className="pl-1">
+                  <div className="text-sm font-semibold text-slate-700">{dayNames[idx]}</div>
+                  <div className="text-[11px] text-slate-500">{iso}</div>
+                </div>
+                <div className="rounded-xl bg-white/70 px-3 py-2 ring-1 ring-slate-100 mt-1">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500">
+                      <span>Progress</span>
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${rankBadgeClass(dayRank)}`}>
+                        Rank {dayRank}
+                      </span>
+                    </div>
+                    <div className="text-base font-semibold text-slate-800">{pct}% 🐰</div>
+                    <div className="h-2 w-20 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className="h-full bg-gradient-to-r from-pink-200 via-pink-300 to-pink-400"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {total === 0 ? (
+                <div className="p-4 text-center text-sm text-slate-500">No tasks yet 🌸</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2 -mt-2 px-2">
+                    <SummaryChip label="Completed" value={completed} tone="mint" />
+                    <SummaryChip label="In Progress" value={inProgress} tone="yellow" />
+                    <SummaryChip label="Total" value={total} tone="blue" />
+                  </div>
+                  <div className="mt-3">
+                    <TaskTable tasks={dayTasks} onToggle={onToggle} />
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function DailyPlanner({
+  tasks,
+  onToggle,
+  checklistByDate,
+  setChecklistByDate,
+}: {
+  tasks: Task[];
+  onToggle: (id: number) => void;
+  checklistByDate: ChecklistMap;
+  setChecklistByDate: Dispatch<SetStateAction<ChecklistMap>>;
+}) {
+  const [startDayISO, setStartDayISO] = useState(toISODate(new Date()));
+  const [selectedDay, setSelectedDay] = useState(startDayISO);
+  const checklist = checklistByDate[selectedDay] ?? DEFAULT_CHECKLIST;
+
+  const setChecklist = (items: ChecklistItem[]) => {
+    setChecklistByDate((prev) => ({ ...prev, [selectedDay]: items }));
+  };
+
+  const start = useMemo(() => startOfWeek(new Date(`${startDayISO}T00:00:00`), true), [startDayISO]);
+  const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => toISODate(addDays(start, i))), [start]);
+
+  const processData = useMemo(() => {
+    const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    return weekDates.map((iso, i) => ({ day: labels[i], pct: percentCompleted(tasks.filter((t) => t.date === iso)) }));
+  }, [tasks, weekDates]);
+
+  const monthYear = { year: start.getFullYear(), monthIndex: start.getMonth() };
+
+  // Auto-roll to today at midnight so rankings/cards stay aligned with the current date
+  useEffect(() => {
+    const tick = () => {
+      const iso = toISODate(new Date());
+      setStartDayISO((prev) => (prev !== iso ? iso : prev));
+      setSelectedDay((prev) => (prev !== iso ? iso : prev));
+    };
+    tick();
+    const id = window.setInterval(tick, 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+      <DailySidebar
+        monthYear={monthYear}
+        startDayISO={startDayISO}
+        setStartDayISO={setStartDayISO}
+        processData={processData}
+        checklist={checklist}
+        setChecklist={setChecklist}
+        tasks={tasks}
+        selectedDay={selectedDay}
+        setSelectedDay={setSelectedDay}
+      />
+      <div className="space-y-4 px-2">
+        <BunStrip imgs={BUNS_DAILY} />
+        <div className="rounded-2xl bg-white/70 ring-1 ring-slate-100 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold text-slate-700">Weekly Spread</div>
+              <div className="text-[11px] text-slate-500">Auto shows the week of your Start Day (Monday → Sunday)</div>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-xl bg-white/80 px-3 py-2 ring-1 ring-pink-100">
+              <CalendarDaysIcon className="h-4 w-4 text-pink-600" />
+              <span className="text-xs text-slate-600">{weekDates[0]} → {weekDates[6]}</span>
+            </div>
+          </div>
+        </div>
+        <DailySpread weekDates={weekDates} tasks={tasks} onToggle={onToggle} />
+      </div>
+    </div>
+  );
+}
+
+/** -------------------- OTHER VIEWS -------------------- */
+
+function MonthlyPlanner({ tasks }: { tasks: Task[] }) {
+  const now = new Date();
+  const [selectedDate, setSelectedDate] = useState<string>(toISODate(now));
+  const monthPrefix = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+  const monthTasks = tasks.filter((t) => t.date.startsWith(monthPrefix));
+  const completed = monthTasks.filter((t) => t.status === "completed").length;
+  const inProgress = Math.max(monthTasks.length - completed, 0);
+  const todo = monthTasks.filter((t) => t.status === "todo").length;
+  const dayTasks = tasks.filter((t) => t.date === selectedDate);
+
+  return (
+    <div className="space-y-4">
+      <BunStrip imgs={BUNS_MONTHLY} />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-2">
+        <SummaryChip label="Total" value={monthTasks.length} tone="blue" />
+        <SummaryChip label="Completed" value={completed} tone="mint" />
+        <SummaryChip label="In Progress" value={inProgress} tone="yellow" />
+        <SummaryChip label="To Do" value={todo} tone="pink" />
+      </div>
+      <SoftCard title={`${now.toLocaleString("default", { month: "long" })} ${now.getFullYear()}`} right={<CalendarDaysIcon className="h-4 w-4 text-pink-600" />}>
+        <MonthCalendar
+          year={now.getFullYear()}
+          month={now.getMonth()}
+          tasks={tasks}
+          selectedDate={selectedDate}
+          onSelectDate={(iso) => setSelectedDate(iso)}
+        />
+        <div className="mt-3 space-y-2">
+          <div className="text-sm font-semibold text-slate-700">Tasks on {selectedDate}</div>
+          {dayTasks.length === 0 ? (
+            <div className="text-xs text-slate-500">No tasks for this day.</div>
+          ) : (
+            <TaskTable tasks={dayTasks} onToggle={() => {}} />
+          )}
+        </div>
+      </SoftCard>
+    </div>
+  );
+}
+
+
+// Weekly view
+function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+  const start = startOfWeek(new Date(), true);
+  const weeks = useMemo(
+    () =>
+      Array.from({ length: 4 }, (_, wi) =>
+        Array.from({ length: 7 }, (_, di) => toISODate(addDays(start, wi * 7 + di))),
+      ),
+    [start],
+  );
+
+  const updateWeekItem = <K extends keyof Task>(
+    id: number,
+    key: K,
+    value: Task[K],
+  ) => {
+    setTasks((prev) =>
+      prev
+        .map((t) => (t.id === id ? { ...t, [key]: value } : t))
+        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)),
+    );
+  };
+
+  const addWeekItem = (weekIndex: number) => {
+    const day = weeks[weekIndex]?.[0] ?? toISODate(new Date());
+    const newItem: Task = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      title: "New item",
+      category: "Task",
+      date: day,
+      time: "09:00",
+      status: "todo",
+      priority: "medium",
+      note: "",
+    };
+    setTasks((prev) => [...prev, newItem].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)));
+  };
+
+  return (
+    <div className="space-y-4 px-2">
+      <BunStrip imgs={BUNS_WEEKLY} />
+      <div className="space-y-4">
+        {weeks.map((weekDays, weekIndex) => {
+          const weekTasks = tasks
+            .filter((t) => weekDays.includes(t.date))
+            .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+          return (
+            <Card
+              key={weekIndex}
+              className="rounded-2xl bg-white/80 backdrop-blur-sm shadow-sm ring-1 ring-slate-100"
+            >
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4">
+                <div>
+                  <CardTitle className="text-base font-semibold text-slate-700">
+                    Week {weekIndex + 1}
+                  </CardTitle>
+                  <div className="text-[11px] text-slate-500">
+                    {new Date(`${weekDays[0]}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })} - {weekDays[0]}
+                    {"  "}→{"  "}
+                    {new Date(`${weekDays[6]}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })} - {weekDays[6]}
+                  </div>
+                </div>
+                <Button
+                  className="rounded-full px-4 py-2 text-sm bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+                  onClick={() => addWeekItem(weekIndex)}
+                >
+                  Add row
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3 px-4">
+                <div className="overflow-auto">
+                  <table className="min-w-full text-xs">
+                    <thead className="text-slate-600">
+                      <tr className="border-b border-slate-200">
+                        <th className="py-2 px-2 text-left">Type</th>
+                        <th className="py-2 px-2 text-left">Title</th>
+                        <th className="py-2 px-2 text-left">Day</th>
+                        <th className="py-2 px-2 text-left">Time</th>
+                        <th className="py-2 px-2 text-left">Note</th>
+                        <th className="py-2 px-2 text-left">Priority</th>
+                        <th className="py-2 px-2 text-center">Delete</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {weekTasks.map((item) => (
+                        <tr
+                          key={item.id}
+                          className="border-b border-slate-100 hover:bg-pink-50/30 transition-colors"
+                        >
+                          <td className="py-2 px-2">
+                            <select
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                              value={item.category}
+                              onChange={(e) =>
+                                updateWeekItem(
+                                  item.id,
+                                  "category",
+                                  e.target.value,
+                                )
+                              }
+                            >
+                              <option value="Task">Task</option>
+                              <option value="Schedule">Schedule</option>
+                              <option value="Appointment">Appointment</option>
+                            </select>
+                          </td>
+                          <td className="py-2 px-2">
+                            <Input
+                              value={item.title}
+                              onChange={(e) => updateWeekItem(item.id, "title", e.target.value)}
+                            />
+                          </td>
+                          <td className="py-2 px-2">
+                          <select
+                            className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                            value={item.date}
+                            onChange={(e) => updateWeekItem(item.id, "date", e.target.value)}
+                          >
+                            {weekDays.map((d) => (
+                              <option key={d} value={d}>
+                                {`${new Date(`${d}T00:00:00`).toLocaleDateString("en-US", {
+                                  weekday: "short",
+                                })} - ${d}`}
+                              </option>
+                            ))}
+                          </select>
+                          </td>
+                          <td className="py-2 px-2">
+                            <Input
+                              type="time"
+                              value={item.time}
+                              onChange={(e) => updateWeekItem(item.id, "time", e.target.value)}
+                            />
+                          </td>
+                          <td className="py-2 px-2">
+                            <Input
+                              value={item.note ?? ""}
+                              onChange={(e) => updateWeekItem(item.id, "note", e.target.value)}
+                            />
+                          </td>
+                          <td className="py-2 px-2">
+                            <select
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                              value={item.priority}
+                              onChange={(e) =>
+                                updateWeekItem(item.id, "priority", e.target.value as Task["priority"])
+                              }
+                            >
+                              <option value="high">high</option>
+                              <option value="medium">medium</option>
+                              <option value="low">low</option>
+                            </select>
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <Button
+                              variant="outline"
+                              className="h-8 rounded-full px-3 text-xs text-slate-600 hover:text-red-600"
+                              onClick={() =>
+                                setTasks((prev) =>
+                                  prev.filter((t) => t.id !== item.id),
+                                )
+                              }
+                            >
+                              Delete
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {weekTasks.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="py-3 text-center text-slate-500">
+                            No rows yet. Click “Add row” to plan this week.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Checklist / Projects view
+type ProjectStatus = "Planned" | "In Progress" | "Blocked" | "Done";
+interface ProjectItem {
+  id: string;
+  start: string; // ISO
+  field: string;
+  project: string;
+  task: string;
+  priority: "high" | "medium" | "low";
+  notes: string;
+  drop: boolean;
+  deadline: string; // ISO end date
+  hours: number;
+  progress: boolean;
+  status: ProjectStatus;
+}
+
+const sampleProjects: ProjectItem[] = [
+  {
+    id: "p1",
+    start: "2025-08-05",
+    field: "GPA năm 3",
+    project: "Kinh tế vi mô",
+    task: "Ôn chương 3 + bài tập",
+    priority: "high",
+    notes: "Slide 45-70 + bài tập nhóm",
+    drop: false,
+    deadline: "2025-08-20",
+    hours: 6,
+    progress: false,
+    status: "In Progress",
+  },
+  {
+    id: "p2",
+    start: "2025-08-10",
+    field: "Học ngoại ngữ",
+    project: "IELTS",
+    task: "Listening test 2",
+    priority: "medium",
+    notes: "Cam 17 test 2",
+    drop: false,
+    deadline: "2025-08-22",
+    hours: 2,
+    progress: true,
+    status: "In Progress",
+  },
+  {
+    id: "p3",
+    start: "2025-08-01",
+    field: "Sức khỏe",
+    project: "Yoga",
+    task: "20 phút buổi sáng",
+    priority: "medium",
+    notes: "Flow nhẹ + hít thở",
+    drop: false,
+    deadline: "2025-08-31",
+    hours: 1,
+    progress: true,
+    status: "Planned",
+  },
+];
+
+function ChecklistView({
+  rows,
+  setRows,
+}: {
+  rows: ProjectItem[];
+  setRows: Dispatch<SetStateAction<ProjectItem[]>>;
+}) {
+  const today = new Date();
+
+  const orderedRows = rows
+    .slice()
+    .sort((a, b) => {
+      const aTime = a.start ? new Date(`${a.start}T00:00:00`).getTime() : 0;
+      const bTime = b.start ? new Date(`${b.start}T00:00:00`).getTime() : 0;
+      return bTime - aTime; // newer dates on top, older drift down
+    });
+
+  const withTimeline = orderedRows.map((p) => {
+    const start = p.start ? new Date(`${p.start}T00:00:00`) : null;
+    const end = p.deadline ? new Date(`${p.deadline}T00:00:00`) : null;
+    const daysWorking =
+      start && !Number.isNaN(start.getTime())
+        ? Math.max(0, Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)))
+        : 0;
+    const daysLeft =
+      end && !Number.isNaN(end.getTime())
+        ? Math.max(0, Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)))
+        : 0;
+    return { ...p, daysWorking, daysLeft };
+  });
+
+  const updateRow = <K extends keyof ProjectItem>(id: string, key: K, value: ProjectItem[K]) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [key]: value } : r)));
+  };
+
+  const addRow = () => {
+    setRows((prev) => [
+      {
+        id: crypto.randomUUID(),
+        start: toISODate(new Date()),
+        field: "",
+        project: "",
+        task: "",
+        priority: "medium",
+        notes: "",
+        drop: false,
+        deadline: "",
+        hours: 0,
+        progress: false,
+        status: "Planned",
+      },
+      ...prev,
+    ]);
+  };
+
+  return (
+    <div className="rounded-2xl bg-white/80 backdrop-blur-sm ring-1 ring-pink-100 shadow p-4">
+      <div className="mb-3">
+        <BunStrip imgs={BUNS_CHECKLIST} />
+      </div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+        <CardTitle className="text-lg">Checklist / Projects</CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            className="rounded-full bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+            onClick={addRow}
+          >
+            Add row
+          </Button>
+          <div className="text-xs text-slate-600">Start month, fields, priority, deadline math, status</div>
+        </div>
+      </div>
+      <div className="overflow-auto">
+        <table className="min-w-full text-xs">
+          <thead className="text-slate-600">
+            <tr className="border-b border-slate-200">
+              <th className="py-2 px-2 text-left">Start month</th>
+              <th className="py-2 px-2 text-left">Field</th>
+              <th className="py-2 px-2 text-left">Project</th>
+              <th className="py-2 px-2 text-left">Task / Activity</th>
+              <th className="py-2 px-2 text-left">Priority</th>
+              <th className="py-2 px-2 text-left">File / Notes</th>
+              <th className="py-2 px-2 text-left">Hours</th>
+              <th className="py-2 px-2 text-center">Drop?</th>
+              <th className="py-2 px-2 text-left">Deadline (start → end)</th>
+              <th className="py-2 px-2 text-center">Progress</th>
+              <th className="py-2 px-2 text-left">Timeline</th>
+              <th className="py-2 px-2 text-left">Status</th>
+              <th className="py-2 px-2 text-center">Delete</th>
+            </tr>
+          </thead>
+          <tbody>
+            {withTimeline.map((r) => (
+              <tr key={r.id} className="border-b border-slate-100 hover:bg-pink-50/30 transition-colors">
+                <td className="py-2 px-2">
+                  <Input
+                    type="month"
+                    value={r.start.slice(0, 7)}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      updateRow(r.id, "start", e.target.value ? `${e.target.value}-01` : "")
+                    }
+                  />
+                </td>
+                <td className="py-2 px-2">
+                  <Input value={r.field} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "field", e.target.value)} />
+                </td>
+                <td className="py-2 px-2">
+                  <Input value={r.project} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "project", e.target.value)} />
+                </td>
+                <td className="py-2 px-2">
+                  <Input value={r.task} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "task", e.target.value)} />
+                </td>
+                <td className="py-2 px-2 capitalize">
+                  <select
+                    className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                    value={r.priority}
+                    onChange={(e) => updateRow(r.id, "priority", e.target.value as ProjectItem["priority"])}
+                  >
+                    <option value="high">high</option>
+                    <option value="medium">medium</option>
+                    <option value="low">low</option>
+                  </select>
+                </td>
+                <td className="py-2 px-2">
+                  <Input value={r.notes} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "notes", e.target.value)} />
+                </td>
+                <td className="py-2 px-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    value={r.hours}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "hours", Number(e.target.value) || 0)}
+                  />
+                </td>
+                <td className="py-2 px-2 text-center">
+                  <Checkbox checked={r.drop} onCheckedChange={() => updateRow(r.id, "drop", !r.drop)} />
+                </td>
+                <td className="py-2 px-2">
+                  <div className="flex flex-col gap-1">
+                    <Input
+                      type="date"
+                      value={r.start}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "start", e.target.value)}
+                    />
+                    <Input
+                      type="date"
+                      value={r.deadline}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "deadline", e.target.value)}
+                    />
+                  </div>
+                </td>
+                <td className="py-2 px-2 text-center">
+                  <Checkbox checked={r.progress} onCheckedChange={() => updateRow(r.id, "progress", !r.progress)} />
+                </td>
+                <td className="py-2 px-2">
+                  <div className="text-[11px] text-slate-600">Working: {r.daysWorking}d</div>
+                  <div className="text-[11px] text-slate-600">Left: {r.daysLeft}d</div>
+                </td>
+                <td className="py-2 px-2">
+                  <select
+                    className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                    value={r.status}
+                    onChange={(e) => updateRow(r.id, "status", e.target.value as ProjectStatus)}
+                  >
+                    <option value="Planned">Planned</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Blocked">Blocked</option>
+                    <option value="Done">Done</option>
+                  </select>
+                </td>
+                <td className="py-2 px-2 text-center">
+                  <Button
+                    variant="outline"
+                    className="h-8 w-8 text-slate-500 hover:text-red-600"
+                    onClick={() => setRows((prev) => prev.filter((p) => p.id !== r.id))}
+                    aria-label="Delete row"
+                  >
+                    <Trash2Icon className="h-4 w-4" />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// -------------------- GOOGLE CALENDAR VIEW --------------------
+function guessCategory(title: string) {
+  const t = title.toLowerCase();
+  if (t.includes("ielts") || t.includes("hsk") || t.includes("tiếng") || t.includes("listening")) return "Học ngoại ngữ";
+  if (t.includes("yoga") || t.includes("gym") || t.includes("tập")) return "Sức khỏe";
+  if (t.includes("marketing")) return "Marketing";
+  if (t.includes("đầu tư") || t.includes("invest")) return "Đầu tư";
+  return "General";
+}
+
+function mapEventToTask(e: any, idx: number): Task | null {
+  const startISO = e.start?.dateTime ?? (e.start?.date ? `${e.start.date}T00:00:00` : null);
+  if (!startISO) return null;
+
+  const d = new Date(startISO);
+  const date = toISODate(d);
+  const time = getEventStartTimeHHMM(e);
+
+  return {
+    id: Date.now() + idx,
+    title: e.summary ?? "(No title)",
+    date,
+    time,
+    status: "todo",
+    priority: "medium",
+    category: guessCategory(e.summary ?? ""),
+  };
+}
+
+function GoogleCalendarView({
+  tasks,
+  setTasks,
+  accessToken,
+  setAccessToken,
+  tokenClient,
+  setTokenClient,
+}: {
+  tasks: Task[];
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  accessToken: string | null;
+  setAccessToken: Dispatch<SetStateAction<string | null>>;
+  tokenClient: any;
+  setTokenClient: Dispatch<SetStateAction<any>>;
+}) {
+  const [selectedDate, setSelectedDate] = useState<string>(toISODate(new Date()));
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncInfo, setSyncInfo] = useState<string | null>(null);
+
+  const dayTasks = useMemo(() => tasks.filter((t) => t.date === selectedDate), [tasks, selectedDate]);
+  const monthPrefix = selectedDate.slice(0, 7);
+  const monthTasks = useMemo(() => tasks.filter((t) => t.date.startsWith(monthPrefix)), [tasks, monthPrefix]);
+
+  const makeKey = (title: string, dateISO: string, timeHHMM: string) =>
+    `${dateISO}-${timeHHMM}-${title}`.toLowerCase();
+
+  const fetchExistingKeys = async (timeMinISO: string, timeMaxISO: string) => {
+    const events = await listPrimaryEvents({
+      accessToken: accessToken as string,
+      timeMinISO,
+      timeMaxISO,
+    });
+    const keys = new Set<string>();
+    events.forEach((e) => {
+      const startISO = e.start?.dateTime ?? (e.start?.date ? `${e.start.date}T00:00:00` : null);
+      if (!startISO) return;
+      const d = new Date(startISO);
+      const date = toISODate(d);
+      const time = getEventStartTimeHHMM(e);
+      const title = e.summary ?? "";
+      keys.add(makeKey(title, date, time));
+    });
+    return keys;
+  };
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+
+    const tryInit = () => {
+      if (!window.google?.accounts?.oauth2) return false;
+
+      const tc = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/calendar.events",
+        callback: (resp: any) => {
+          if (resp?.access_token) setAccessToken(resp.access_token);
+        },
+      });
+
+      setTokenClient(tc);
+      return true;
+    };
+
+    if (tryInit()) return;
+
+    const id = window.setInterval(() => {
+      if (tryInit()) window.clearInterval(id);
+    }, 200);
+
+    return () => window.clearInterval(id);
+  }, []);
+
+  const connectGoogle = () => {
+    if (!tokenClient) return;
+    setSyncError(null);
+    setSyncInfo(null);
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  };
+
+  const syncDayFromGoogle = async () => {
+    if (!accessToken) return;
+
+    const start = new Date(`${selectedDate}T00:00:00`);
+    const end = new Date(`${selectedDate}T23:59:59`);
+
+    try {
+      setSyncError(null);
+      setSyncInfo(null);
+      const events = await listPrimaryEvents({
+        accessToken,
+        timeMinISO: start.toISOString(),
+        timeMaxISO: end.toISOString(),
+      });
+
+      const mapped = events
+        .map((e, idx) => mapEventToTask(e, idx))
+        .filter(Boolean) as Task[];
+
+      setTasks((prev) => {
+        const others = prev.filter((t) => t.date !== selectedDate);
+        const existingDay = prev.filter((t) => t.date === selectedDate);
+        const mergedMap = new Map<string, Task>();
+
+        const makeKey = (t: Task) => `${t.date}-${t.time}-${t.title}`.toLowerCase();
+        existingDay.forEach((t) => mergedMap.set(makeKey(t), t));
+        mapped.forEach((t) => {
+          const key = makeKey(t);
+          if (!mergedMap.has(key)) mergedMap.set(key, t);
+        });
+
+        const mergedDay = Array.from(mergedMap.values()).sort((a, b) =>
+          (a.date + a.time).localeCompare(b.date + b.time),
+        );
+        return [...others, ...mergedDay].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+      });
+    } catch (err) {
+      console.error("Google Calendar sync failed", err);
+      const message = err instanceof Error ? err.message : "Unknown Google Calendar error";
+      setSyncError(message);
+    }
+  };
+
+  const pushDayToGoogle = async () => {
+    if (!accessToken) return;
+    if (dayTasks.length === 0) {
+      setSyncError("No tasks for this day to push.");
+      return;
+    }
+
+    try {
+      setSyncError(null);
+      setSyncInfo("Pushing tasks to Google Calendar...");
+      const start = new Date(`${selectedDate}T00:00:00`);
+      const end = new Date(`${selectedDate}T23:59:59`);
+      const existing = await fetchExistingKeys(start.toISOString(), end.toISOString());
+      let pushed = 0;
+      for (const t of dayTasks) {
+        const startISO = new Date(`${t.date}T${t.time || "00:00"}:00`).toISOString();
+        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+        const key = makeKey(t.title, t.date, t.time || "00:00");
+        if (existing.has(key)) continue;
+        await createPrimaryEvent({
+          accessToken,
+          summary: t.title,
+          description: `${t.category ?? "Task"} • Priority: ${t.priority}`,
+          startISO,
+          endISO,
+        });
+        pushed += 1;
+        existing.add(key);
+      }
+      setSyncInfo(`Pushed ${pushed} task(s) to Google Calendar (skipped duplicates).`);
+    } catch (err) {
+      console.error("Google Calendar push failed", err);
+      const message = err instanceof Error ? err.message : "Unknown Google Calendar push error";
+      setSyncError(message);
+      setSyncInfo(null);
+    }
+  };
+
+  const pushMonthToGoogle = async () => {
+    if (!accessToken) return;
+    if (monthTasks.length === 0) {
+      setSyncError("No tasks for this month to push.");
+      return;
+    }
+    try {
+      setSyncError(null);
+      setSyncInfo("Pushing month tasks to Google Calendar...");
+      const monthStart = new Date(`${monthPrefix}-01T00:00:00`);
+      const monthEnd = new Date(new Date(`${monthPrefix}-01T00:00:00`).getFullYear(), new Date(`${monthPrefix}-01T00:00:00`).getMonth() + 1, 0, 23, 59, 59);
+      const existing = await fetchExistingKeys(monthStart.toISOString(), monthEnd.toISOString());
+      let pushed = 0;
+      for (const t of monthTasks) {
+        const startISO = new Date(`${t.date}T${t.time || "00:00"}:00`).toISOString();
+        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+        const key = makeKey(t.title, t.date, t.time || "00:00");
+        if (existing.has(key)) continue;
+        await createPrimaryEvent({
+          accessToken,
+          summary: t.title,
+          description: `${t.category ?? "Task"} • Priority: ${t.priority}`,
+          startISO,
+          endISO,
+        });
+        pushed += 1;
+        existing.add(key);
+      }
+      setSyncInfo(`Pushed ${pushed} task(s) for ${monthPrefix} (skipped duplicates).`);
+    } catch (err) {
+      console.error("Google Calendar month push failed", err);
+      const message = err instanceof Error ? err.message : "Unknown Google Calendar push error";
+      setSyncError(message);
+      setSyncInfo(null);
+    }
+  };
+
+  const toggleTaskDone = (id: number) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === id ? { ...t, status: t.status === "completed" ? "todo" : "completed" } : t,
+      ),
+    );
+  };
+
+  const clearDay = () => setTasks((prev) => prev.filter((t) => t.date !== selectedDate));
+
+  const updateTaskPriority = (id: number, priority: Task["priority"]) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, priority } : t)));
+  };
+
+  const selectedDateObj = new Date(`${selectedDate}T00:00:00`);
+  const selectedMonthYear = { year: selectedDateObj.getFullYear(), monthIndex: selectedDateObj.getMonth() };
+
+  return (
+    <div className="min-h-screen p-4 sm:p-6 relative">
+      <div
+        className="absolute inset-0 bg-cover bg-center bg-fixed blur-sm"
+        style={{ backgroundImage: "url(/bg.jpg)" }}
+      />
+      <div className="absolute inset-0 bg-white/30" />
+      <div className="relative">
+      <div className="max-w-6xl mx-auto flex flex-col gap-4 px-2 sm:px-4">
+        <BunStrip imgs={BUNS_GOOGLE} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className="rounded-full bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90 disabled:opacity-60"
+              onClick={connectGoogle}
+              disabled={!GOOGLE_CLIENT_ID}
+            >
+              {accessToken ? "Google Connected ✅" : "Connect Google Calendar"}
+            </Button>
+            <Button
+              className="rounded-full bg-white/80 ring-1 ring-pink-100 text-slate-700 hover:bg-pink-50"
+              variant="outline"
+              onClick={syncDayFromGoogle}
+              disabled={!accessToken}
+            >
+              Sync Selected Day
+            </Button>
+            <Button
+              className="rounded-full bg-white/80 ring-1 ring-pink-100 text-slate-700 hover:bg-pink-50"
+              variant="outline"
+              onClick={pushDayToGoogle}
+              disabled={!accessToken || dayTasks.length === 0}
+            >
+              Push Day to Google
+            </Button>
+            <Button
+              className="rounded-full bg-white/80 ring-1 ring-pink-100 text-slate-700 hover:bg-pink-50"
+              variant="outline"
+              onClick={pushMonthToGoogle}
+              disabled={!accessToken || monthTasks.length === 0}
+            >
+              Push Month to Google
+            </Button>
+            <Button
+              className="rounded-full bg-white/80 ring-1 ring-pink-100 text-slate-700 hover:bg-pink-50"
+              variant="outline"
+              onClick={clearDay}
+            >
+              Clear Day
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-muted-foreground">Selected day</span>
+            <Input
+              type="date"
+              value={selectedDate}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setSelectedDate(e.target.value)}
+              className="w-[170px] rounded-full bg-white/70"
+            />
+          </div>
+        </div>
+        {syncError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Sync failed: {syncError}
+          </div>
+        )}
+        {syncInfo && !syncError && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {syncInfo}
+          </div>
+        )}
+
+        <div className="grid lg:grid-cols-12 gap-4 pt-2 sm:pt-4">
+          <div className="lg:col-span-4 space-y-4">
+            <Card className="bg-white/80 backdrop-blur-sm rounded-2xl shadow ring-1 ring-pink-100 mt-2">
+              <CardHeader className="px-4 pt-3">
+                <CardTitle className="text-base">Month Overview</CardTitle>
+              </CardHeader>
+              <CardContent className="px-3 sm:px-4 py-4 sm:py-5">
+                <MonthCalendar
+                  year={selectedMonthYear.year}
+                  month={selectedMonthYear.monthIndex}
+                  tasks={tasks}
+                  selectedDate={selectedDate}
+                  onSelectDate={(iso) => setSelectedDate(iso)}
+                />
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="lg:col-span-8">
+            <Card className="bg-white/80 backdrop-blur-sm rounded-2xl shadow ring-1 ring-pink-100 mt-2">
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 pt-3">
+                <CardTitle className="text-base">Daily Plan — {selectedDate}</CardTitle>
+                <div className="text-xs text-muted-foreground">Tip: Click the checkbox to mark completed</div>
+              </CardHeader>
+              <CardContent className="space-y-3 px-4 py-4 sm:py-5">
+                {dayTasks.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">
+                    No tasks yet. Click <b>Sync Selected Day</b> to pull from Google Calendar.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {dayTasks
+                      .slice()
+                      .sort((a, b) => a.time.localeCompare(b.time))
+                      .map((t) => (
+                        <div
+                          key={t.id}
+                          className="flex items-center justify-between gap-3 rounded-2xl bg-white/60 px-4 py-3 ring-1 ring-pink-100"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Checkbox checked={t.status === "completed"} onCheckedChange={() => toggleTaskDone(t.id)} />
+                            <div>
+                              <div className={`text-sm font-medium ${t.status === "completed" ? "line-through text-muted-foreground" : ""}`}>
+                                {t.title}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {t.category} • {t.time}
+                              </div>
+                            </div>
+                          </div>
+
+                          <select
+                            className="rounded-full border border-slate-200 px-2 py-1 text-xs"
+                            value={t.priority}
+                            onChange={(e) => updateTaskPriority(t.id, e.target.value as Task["priority"])}
+                          >
+                            <option value="high">high</option>
+                            <option value="medium">medium</option>
+                            <option value="low">low</option>
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+  );
+}
+
+export default function PlannerAppV2() {
+  const [view, setView] = useState<View>("daily");
+  const [tasks, setTasks] = useState<Task[]>(sampleTasks);
+  const [hydrated, setHydrated] = useState(false);
+  const [checklistByDate, setChecklistByDate] = useState<ChecklistMap>({});
+  const [checklistHydrated, setChecklistHydrated] = useState(false);
+  const [projects, setProjects] = useState<ProjectItem[]>(sampleProjects);
+  const [projectsHydrated, setProjectsHydrated] = useState(false);
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
+  const [googleTokenClient, setGoogleTokenClient] = useState<any>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(TASKS_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Task[];
+        if (Array.isArray(parsed)) {
+          setTasks(parsed);
+        }
+      } catch (err) {
+        console.error("Failed to parse saved tasks", err);
+      }
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+  }, [tasks, hydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(CHECKLIST_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as ChecklistMap;
+        if (parsed && typeof parsed === "object") {
+          setChecklistByDate(parsed);
+        }
+      } catch (err) {
+        console.error("Failed to parse saved checklist map", err);
+      }
+    }
+    // seed today if empty
+    setChecklistByDate((prev) => {
+      const today = toISODate(new Date());
+      if (prev[today]) return prev;
+      return { ...prev, [today]: DEFAULT_CHECKLIST };
+    });
+    setChecklistHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!checklistHydrated) return;
+    localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(checklistByDate));
+  }, [checklistByDate, checklistHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as ProjectItem[];
+        if (Array.isArray(parsed)) {
+          setProjects(parsed);
+        }
+      } catch (err) {
+        console.error("Failed to parse saved projects", err);
+      }
+    }
+    setProjectsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!projectsHydrated) return;
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+  }, [projects, projectsHydrated]);
+
+  const toggleTask = (id: number) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, status: t.status === "completed" ? "todo" : "completed" }
+          : t,
+      ),
+    );
+  };
+
+  return (
+    <div className="min-h-screen p-4 sm:p-6 relative">
+      <div
+        className="absolute inset-0 bg-cover bg-center bg-fixed blur-sm"
+        style={{ backgroundImage: "url(/bg.jpg)" }}
+      />
+      <div className="absolute inset-0 bg-white/30" />
+      <div className="relative">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <div className="rounded-2xl bg-white/80 px-4 py-3 ring-1 ring-pink-100 shadow-sm">
+              <div className="text-[11px] text-slate-500">This month is…</div>
+              <div className="text-xl font-bold tracking-tight text-slate-800">
+                {new Date().toLocaleString("default", { month: "long", year: "numeric" })}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { key: "daily", label: "Daily" },
+                { key: "weekly", label: "Weekly" },
+                { key: "monthly", label: "Monthly" },
+                { key: "google", label: "Google" },
+                { key: "checklist", label: "Checklist" },
+              ] as Array<{ key: View; label: string }>
+            ).map((b) => (
+              <Button
+                key={b.key}
+                onClick={() => setView(b.key)}
+                variant={view === b.key ? "default" : "outline"}
+                className={`rounded-full shadow-sm ${view === b.key ? "bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900" : "bg-white/80 text-slate-700 ring-1 ring-pink-100 hover:bg-pink-50"}`}
+              >
+                {b.label}
+              </Button>
+            ))}
+          </div>
+        </header>
+
+        {view === "daily" && (
+          <DailyPlanner
+            tasks={tasks}
+            onToggle={toggleTask}
+            checklistByDate={checklistByDate}
+            setChecklistByDate={setChecklistByDate}
+          />
+        )}
+        {view === "weekly" && <WeeklyPlanner tasks={tasks} setTasks={setTasks} />}
+        {view === "monthly" && <MonthlyPlanner tasks={tasks} />}
+        {view === "google" && (
+          <GoogleCalendarView
+            tasks={tasks}
+            setTasks={setTasks}
+            accessToken={googleAccessToken}
+            setAccessToken={setGoogleAccessToken}
+            tokenClient={googleTokenClient}
+            setTokenClient={setGoogleTokenClient}
+          />
+        )}
+        {view === "checklist" && <ChecklistView rows={projects} setRows={setProjects} />}
+      </div>
+      </div>
+    </div>
+  );
+}

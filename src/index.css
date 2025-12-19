@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Enhanced global styles for the planner. A soft gradient and neutral text
+  colours mirror the pastel look of the reference images. Feel free to
+  adjust the gradient colours to suit your own style.
+*/
+body {
+  margin: 0;
+  background: linear-gradient(to bottom right, #fff7fb, #fafcff, #f7fff9);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  color: #333333;
+}
