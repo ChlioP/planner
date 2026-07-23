@@ -56,6 +56,7 @@ import {
   syncUserData,
   type PlannerPreferences,
 } from "@/lib/firestoreSync";
+import { createPlannerBackup, mergeBackupTasks, parsePlannerBackup } from "@/lib/plannerBackup";
 import bun4 from "../bun4.jpg";
 import bun5 from "../bun5.jpg";
 import bun6 from "../bun6.jpg";
@@ -2191,10 +2192,13 @@ export default function PlannerAppV2() {
     firebaseEnabled ? "loading" : navigator.onLine ? "saved" : "offline",
   );
   const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [syncRetry, setSyncRetry] = useState(0);
   const initializingUserRef = useRef<string | null>(null);
   const currentUserIdRef = useRef<string | null>(null);
   const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const backupInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const raw = localStorage.getItem(TASKS_STORAGE_KEY);
@@ -2328,14 +2332,24 @@ export default function PlannerAppV2() {
 
     const initializeSync = async () => {
       setSyncState("saving");
+      setSyncErrorMessage(null);
       try {
         const remotePreferences = await getUserPreferences(firebaseUser.uid);
         const migrationComplete = remotePreferences?.localMigrationComplete === true;
         if (!migrationComplete) {
-          setMigrationMessage(`Found ${tasks.length} local task(s). Migrating to Firestore…`);
+          setMigrationMessage(`Found ${tasks.length} local task(s) ready for Firestore migration.`);
+          const confirmed = window.confirm(
+            `Found ${tasks.length} local planner task(s). Migrate them to your authenticated Firestore account now?`,
+          );
+          if (!confirmed) {
+            setMigrationMessage(`Migration paused: ${tasks.length} local task(s) remain safely stored on this device.`);
+            setSyncState("saved");
+            return;
+          }
+          setMigrationMessage(`Migrating ${tasks.length} local task(s) to Firestore…`);
           await migrateLocalData(firebaseUser.uid, tasks, preferences);
           if (currentUserIdRef.current === firebaseUser.uid) {
-            setMigrationMessage(`Migrated and verified ${tasks.length} local task(s).`);
+            setMigrationMessage(`Migration complete: migrated and verified ${tasks.length} local task(s).`);
           }
         } else if (remotePreferences) {
           if (typeof remotePreferences.musicQuery === "string") setMusicQuery(remotePreferences.musicQuery);
@@ -2351,11 +2365,13 @@ export default function PlannerAppV2() {
         setTasks((localTasks) => mergeTaskCopies(localTasks, remoteTasks));
         setSyncInitialized(true);
         setSyncState("saved");
+        setSyncErrorMessage(null);
       } catch (error) {
         console.error("Firebase initial synchronization failed", error);
         if (currentUserIdRef.current === firebaseUser.uid) {
           initializingUserRef.current = null;
           setSyncState(navigator.onLine ? "sync error" : "offline");
+          setSyncErrorMessage(error instanceof Error ? error.message : "Firebase synchronization failed.");
         }
       }
     };
@@ -2371,13 +2387,18 @@ export default function PlannerAppV2() {
     }
     const timeout = window.setTimeout(() => {
       setSyncState("saving");
+      setSyncErrorMessage(null);
       syncQueueRef.current = syncQueueRef.current
         .catch(() => undefined)
         .then(() => syncUserData(firebaseUser.uid, tasks, preferences))
-        .then(() => setSyncState("saved"))
+        .then(() => {
+          setSyncState("saved");
+          setSyncErrorMessage(null);
+        })
         .catch((error) => {
           console.error("Firebase synchronization failed", error);
           setSyncState(navigator.onLine ? "sync error" : "offline");
+          setSyncErrorMessage(error instanceof Error ? error.message : "Firebase synchronization failed.");
         });
     }, 500);
     return () => window.clearTimeout(timeout);
@@ -2388,6 +2409,43 @@ export default function PlannerAppV2() {
   };
 
   const activeTasks = tasks.filter((task) => task.status !== "archived");
+
+  const exportBackup = () => {
+    const backup = createPlannerBackup(tasks, preferences);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `bunbun-planner-backup-${toISODate(new Date())}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setBackupMessage(`Exported ${tasks.length} task(s) to JSON.`);
+  };
+
+  const importBackup = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const backup = parsePlannerBackup(await file.text());
+      const confirmed = window.confirm(
+        `Import ${backup.tasks.length} task(s) from this backup? Existing tasks will be preserved and duplicates merged by stable ID.`,
+      );
+      if (!confirmed) {
+        setBackupMessage("Import cancelled. No planner data was changed.");
+        return;
+      }
+      setTasks((current) => mergeBackupTasks(current, backup.tasks));
+      setMusicQuery(backup.preferences.musicQuery);
+      setChecklistByDate(backup.preferences.checklistByDate as ChecklistMap);
+      setProjects(backup.preferences.projects as ProjectItem[]);
+      setChecklistNote(backup.preferences.checklistNote);
+      setBackupMessage(`Imported ${backup.tasks.length} task(s); duplicate IDs were merged.`);
+    } catch (error) {
+      console.error("Planner backup import failed", error);
+      setBackupMessage(error instanceof Error ? `Import failed: ${error.message}` : "Import failed: invalid backup file.");
+    }
+  };
 
   return (
     <div className="min-h-screen p-4 sm:p-6 relative">
@@ -2429,6 +2487,9 @@ export default function PlannerAppV2() {
                 {b.label}
               </Button>
             ))}
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={exportBackup}>Export JSON</Button>
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => backupInputRef.current?.click()}>Import JSON</Button>
+            <input ref={backupInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void importBackup(event)} aria-label="Import planner JSON backup" />
             {firebaseEnabled && !authReady ? (
               <span role="status" aria-live="polite" className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
                 Cloud sync • loading
@@ -2440,17 +2501,22 @@ export default function PlannerAppV2() {
                     {firebaseUser.displayName ?? firebaseUser.email ?? "Signed in"} • {syncState}
                   </span>
                   {syncState === "sync error" ? (
-                    <Button variant="outline" className="rounded-full bg-white/80" onClick={() => setSyncRetry((value) => value + 1)}>Retry sync</Button>
+                    <Button variant="outline" className="rounded-full bg-white/80" onClick={() => {
+                      setSyncErrorMessage(null);
+                      setSyncRetry((value) => value + 1);
+                    }}>Retry sync</Button>
                   ) : null}
                   <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signOutFirebase().catch((error) => {
                     console.error("Firebase sign-out failed", error);
                     setSyncState("sync error");
+                    setSyncErrorMessage(error instanceof Error ? error.message : "Firebase sign-out failed.");
                   })}>Sign out</Button>
                 </>
               ) : (
                 <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signInWithGoogle().catch((error) => {
                   console.error("Google sign-in failed", error);
                   setSyncState("sync error");
+                  setSyncErrorMessage(error instanceof Error ? error.message : "Google sign-in failed.");
                 })}>Sign in with Google</Button>
               )
             ) : null}
@@ -2460,6 +2526,16 @@ export default function PlannerAppV2() {
         {migrationMessage && firebaseUser ? (
           <div role="status" aria-live="polite" className="mb-4 rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-700 ring-1 ring-pink-100">
             {migrationMessage}
+          </div>
+        ) : null}
+        {syncErrorMessage && firebaseEnabled ? (
+          <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Sync error: {syncErrorMessage}
+          </div>
+        ) : null}
+        {backupMessage ? (
+          <div role="status" aria-live="polite" className="mb-4 rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-700 ring-1 ring-pink-100">
+            {backupMessage}
           </div>
         ) : null}
 

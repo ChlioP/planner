@@ -1,5 +1,30 @@
 # React + TypeScript + Vite
 
+## Planner Features
+
+- Persistent cloud task storage with Firebase
+- Google authentication
+- Completed-task history
+- Task archive and restore
+- Search and advanced filtering
+- Task lifecycle activity tracking
+- Offline local caching
+- Legacy data migration
+- JSON backup and recovery
+- Responsive planner interface
+
+## Architecture
+
+```text
+React Planner UI
+       ↓
+Task State and Repository Layer
+       ↓
+Local Cache ↔ Firebase Firestore
+       ↓
+Authentication and User-Specific Data
+```
+
 ## Optional Firebase synchronization
 
 The planner remains fully usable with its existing localStorage cache when Firebase is not configured.
