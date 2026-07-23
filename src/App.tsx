@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, Dispatch, JSX, KeyboardEvent, ReactNode, SetStateAction } from "react";
 
 import {
@@ -25,10 +25,34 @@ import {
   CalendarDaysIcon,
   CrownIcon,
   ListChecksIcon,
+  Music2Icon,
   SparklesIcon,
   Trash2Icon,
 } from "lucide-react";
 import { listPrimaryEvents, getEventStartTimeHHMM, toISODate, createPrimaryEvent } from "@/lib/googleCalendar";
+import {
+  archiveTask,
+  completeTask,
+  migrateTasks,
+  restoreTask,
+  updateTask,
+  type TaskRecord,
+} from "@/lib/taskHistory";
+import {
+  firebaseEnabled,
+  observeFirebaseUser,
+  signInWithGoogle,
+  signOutFirebase,
+  type User as FirebaseUser,
+} from "@/lib/firebase";
+import {
+  getUserPreferences,
+  loadUserTasks,
+  mergeTaskCopies,
+  migrateLocalData,
+  syncUserData,
+  type PlannerPreferences,
+} from "@/lib/firestoreSync";
 import bun4 from "../bun4.jpg";
 import bun5 from "../bun5.jpg";
 import bun6 from "../bun6.jpg";
@@ -41,6 +65,7 @@ import bun12 from "../bun12.jpg";
 import bun13 from "../bun13.jpg";
 import bun14 from "../bun14.jpg";
 import bun15 from "../bun15.jpg";
+import bun16 from "../bun16.jpg";
 import bun17 from "../bun17.jpg";
 import bun18 from "../bun18.jpg";
 import bun19 from "../bun19.jpg";
@@ -49,17 +74,9 @@ import bun0 from "../bun.jpg";
 import bun1 from "../bun1.jpg";
 import bun2 from "../bun2.jpg";
 import bun3 from "../bun3.jpg";
+import bgImg from "../bg.jpg";
 
-interface Task {
-  id: number;
-  title: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:mm
-  status: "completed" | "inProgress" | "todo";
-  priority: "high" | "medium" | "low";
-  category: string;
-  note?: string;
-}
+type Task = TaskRecord;
 
 declare global {
   interface Window {
@@ -67,9 +84,9 @@ declare global {
   }
 }
 
-type View = "monthly" | "weekly" | "daily" | "google" | "checklist";
+type View = "monthly" | "weekly" | "daily" | "google" | "checklist" | "archive" | "history";
 
-const sampleTasks: Task[] = [
+const sampleTasks: Task[] = migrateTasks([
   { id: 1, title: "Học Tiếng Trung HSK3", date: "2025-08-13", time: "09:00", status: "completed", priority: "high", category: "Học ngoại ngữ" },
   { id: 2, title: "Listening - IELTS", date: "2025-08-13", time: "11:00", status: "inProgress", priority: "medium", category: "Học ngoại ngữ" },
   { id: 3, title: "Tập Yoga", date: "2025-08-14", time: "07:30", status: "completed", priority: "high", category: "Sức khỏe" },
@@ -79,17 +96,20 @@ const sampleTasks: Task[] = [
   { id: 7, title: "Họp CLB thiện nguyện", date: "2025-08-17", time: "17:00", status: "completed", priority: "medium", category: "CLB & tình nguyện" },
   { id: 8, title: "Kinh tế vi mô", date: "2025-08-18", time: "08:00", status: "inProgress", priority: "high", category: "GPA năm 3" },
   { id: 9, title: "Nấu ăn, nghỉ ngơi", date: "2025-08-18", time: "18:00", status: "todo", priority: "low", category: "Kỹ năng sống" },
-];
+]);
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 const TASKS_STORAGE_KEY = "planner_tasks_v1";
 const CHECKLIST_STORAGE_KEY = "planner_checklist_by_day_v1";
 const PROJECTS_STORAGE_KEY = "planner_projects_v1";
+const MUSIC_STORAGE_KEY = "planner_music_query_v1";
+const CHECKLIST_NOTE_STORAGE_KEY = "planner_checklist_note_v1";
+const DEFAULT_MUSIC_QUERY = "lofi hip hop beats to study and relax to";
 const DEFAULT_CHECKLIST: ChecklistItem[] = [
-  { id: "1", text: "Ăn sáng đúng giờ", done: true },
+  { id: "1", text: "Chép kinh", done: false },
   { id: "2", text: "Uống đủ 1.5L nước", done: false },
   { id: "3", text: "Skincare đều đặn", done: false },
-  { id: "4", text: "Tập thể dục 30ph", done: true },
+  { id: "4", text: "Tập thể dục 30ph", done: false },
 ];
 
 const BUNS_DAILY = [bun4, bun5, bun6, bun7];
@@ -97,6 +117,40 @@ const BUNS_GOOGLE = [bun8, bun9, bun10, bun11];
 const BUNS_CHECKLIST = [bun12, bun13, bun14, bun15];
 const BUNS_WEEKLY = [bun17, bun18, bun19, bun20];
 const BUNS_MONTHLY = [bun0, bun1, bun2, bun3];
+const DEFAULT_WEATHER_LOCATION = { lat: 16.0544, lon: 108.2022, label: "Da Nang, Vietnam" };
+
+function extractYouTubeVideoId(input: string) {
+  try {
+    const url = new URL(input);
+    const host = url.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") {
+      return url.pathname.slice(1);
+    }
+    if (host.endsWith("youtube.com")) {
+      if (url.pathname === "/watch") {
+        return url.searchParams.get("v");
+      }
+      if (url.pathname.startsWith("/shorts/")) {
+        return url.pathname.split("/")[2];
+      }
+      if (url.pathname.startsWith("/embed/")) {
+        return url.pathname.split("/")[2];
+      }
+    }
+  } catch {
+    // not a URL, fall back to search embed
+  }
+  return null;
+}
+
+function buildYouTubeEmbedUrl(input: string) {
+  const trimmed = input.trim() || DEFAULT_MUSIC_QUERY;
+  const id = extractYouTubeVideoId(trimmed);
+  if (id) {
+    return `https://www.youtube.com/embed/${id}`;
+  }
+  return `https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(trimmed)}`;
+}
 
 function BunStrip({ imgs }: { imgs: string[] }) {
   return (
@@ -186,7 +240,7 @@ function SummaryChip({ label, value, tone }: { label: string; value: number; ton
   );
 }
 
-function TaskTable({ tasks, onToggle }: { tasks: Task[]; onToggle: (id: number) => void }) {
+function TaskTable({ tasks, onToggle }: { tasks: Task[]; onToggle: (id: string) => void }) {
   return (
     <ScrollArea className="h-52 pr-2">
       <table className="min-w-full text-xs">
@@ -304,6 +358,19 @@ interface ChecklistItem {
 }
 type ChecklistMap = Record<string, ChecklistItem[]>;
 
+interface WeatherState {
+  loading: boolean;
+  error: string | null;
+  locationLabel: string;
+  tempC: number | null;
+  tempF: number | null;
+  hiC: number | null;
+  loC: number | null;
+  hiF: number | null;
+  loF: number | null;
+  description: string;
+}
+
 function rankFromPct(pct: number): Rank {
   if (pct >= 90) return "A";
   if (pct >= 70) return "B";
@@ -318,6 +385,160 @@ function rankBadgeClass(rank: Rank) {
   if (rank === "C") return "bg-amber-100 text-amber-800 ring-amber-200";
   if (rank === "D") return "bg-orange-100 text-orange-800 ring-orange-200";
   return "bg-rose-100 text-rose-800 ring-rose-200";
+}
+
+function toFahrenheit(celsius: number | null) {
+  if (celsius === null || Number.isNaN(celsius)) return null;
+  return Math.round((celsius * 9) / 5 + 32);
+}
+
+function describeWeather(code?: number) {
+  const map: Record<number, string> = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Drizzle",
+    55: "Heavy drizzle",
+    56: "Freezing drizzle",
+    57: "Freezing drizzle",
+    61: "Light rain",
+    63: "Rain",
+    65: "Heavy rain",
+    66: "Freezing rain",
+    67: "Freezing rain",
+    71: "Light snow",
+    73: "Snow",
+    75: "Heavy snow",
+    77: "Snow grains",
+    80: "Light showers",
+    81: "Showers",
+    82: "Heavy showers",
+    85: "Snow showers",
+    86: "Snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with hail",
+    99: "Thunderstorm with hail",
+  };
+  return map[code ?? -1] ?? "Fetching forecast…";
+}
+
+function WeatherPanel() {
+  const [weather, setWeather] = useState<WeatherState>({
+    loading: true,
+    error: null,
+    locationLabel: "Fetching location…",
+    tempC: null,
+    tempF: null,
+    hiC: null,
+    loC: null,
+    hiF: null,
+    loF: null,
+    description: "Fetching forecast…",
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadWeather = async (lat: number, lon: number, label: string) => {
+      setWeather((prev) => ({ ...prev, loading: true, error: null, locationLabel: label }));
+      try {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min&timezone=auto`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          throw new Error(`Weather fetch failed (${resp.status})`);
+        }
+        const data = await resp.json();
+        if (cancelled) return;
+        const tempC =
+          typeof data?.current_weather?.temperature === "number" ? data.current_weather.temperature : null;
+        const hiCRaw = Array.isArray(data?.daily?.temperature_2m_max) ? data.daily.temperature_2m_max[0] ?? null : null;
+        const loCRaw = Array.isArray(data?.daily?.temperature_2m_min) ? data.daily.temperature_2m_min[0] ?? null : null;
+        const hiC = typeof hiCRaw === "number" ? hiCRaw : null;
+        const loC = typeof loCRaw === "number" ? loCRaw : null;
+        setWeather({
+          loading: false,
+          error: null,
+          locationLabel: label || data?.timezone || "Your location",
+          tempC,
+          tempF: toFahrenheit(tempC),
+          hiC,
+          loC,
+          hiF: toFahrenheit(hiC),
+          loF: toFahrenheit(loC),
+          description: describeWeather(data?.current_weather?.weathercode),
+        });
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : "Weather unavailable right now.";
+        setWeather((prev) => ({ ...prev, loading: false, error: message }));
+      }
+    };
+
+    const fetchForUser = () => {
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => loadWeather(pos.coords.latitude, pos.coords.longitude, "Your location"),
+          () => loadWeather(DEFAULT_WEATHER_LOCATION.lat, DEFAULT_WEATHER_LOCATION.lon, DEFAULT_WEATHER_LOCATION.label),
+          { timeout: 7000 },
+        );
+      } else {
+        loadWeather(DEFAULT_WEATHER_LOCATION.lat, DEFAULT_WEATHER_LOCATION.lon, DEFAULT_WEATHER_LOCATION.label);
+      }
+    };
+
+    fetchForUser();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const formatTempPair = (c: number | null, f: number | null) => {
+    if (c === null && f === null) return "--";
+    if (c === null) return `${f}°F`;
+    if (f === null) return `${Math.round(c)}°C`;
+    return `${Math.round(c)}°C / ${f}°F`;
+  };
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-2xl ring-1 ring-pink-100 shadow-sm"
+      style={{ backgroundImage: `url(${bun16})`, backgroundSize: "cover", backgroundPosition: "center" }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-white/90 via-white/70 to-white/55" />
+      <div className="relative p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-700">Today’s weather</div>
+          <div className="text-[11px] text-slate-600">{weather.locationLabel}</div>
+        </div>
+
+        {weather.loading ? (
+          <div className="text-sm text-slate-600">Loading forecast…</div>
+        ) : weather.error ? (
+          <div className="text-sm text-red-600">Weather unavailable. {weather.error}</div>
+        ) : (
+          <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+            <div>
+              <div className="text-3xl font-bold text-slate-800">
+                {weather.tempC !== null ? `${Math.round(weather.tempC)}°C` : "--"}
+              </div>
+              <div className="text-sm text-slate-600">
+                {weather.tempF !== null ? `${weather.tempF}°F` : ""}
+              </div>
+              <div className="mt-1 text-sm text-slate-700">{weather.description}</div>
+            </div>
+            <div className="rounded-xl bg-white/80 px-3 py-2 ring-1 ring-pink-100 text-xs text-slate-700">
+              <div>High: {formatTempPair(weather.hiC, weather.hiF)}</div>
+              <div>Low: {formatTempPair(weather.loC, weather.loF)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function DailySidebar({
@@ -407,6 +628,8 @@ function DailySidebar({
         </div>
       </SoftCard>
 
+      <WeatherPanel />
+
       <SoftCard title="Task Process">
         <div className="h-36">
           <ResponsiveContainer width="100%" height="100%">
@@ -442,6 +665,14 @@ function DailySidebar({
           >
             Add
           </Button>
+          <Button
+            onClick={() => {
+              setChecklist(checklist.map((item) => ({ ...item, done: false })));
+            }}
+            className="rounded-xl bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+          >
+            Uncheck all
+          </Button>
         </div>
 
         <div className="mt-3 space-y-2">
@@ -475,6 +706,103 @@ function DailySidebar({
   );
 }
 
+function FocusMusicCard({
+  musicQuery,
+  setMusicQuery,
+}: {
+  musicQuery: string;
+  setMusicQuery: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(musicQuery);
+  const embedUrl = useMemo(() => buildYouTubeEmbedUrl(musicQuery), [musicQuery]);
+
+  useEffect(() => {
+    setDraft(musicQuery);
+  }, [musicQuery]);
+
+  const updateSong = () => {
+    const next = draft.trim();
+    if (!next) return;
+    setMusicQuery(next);
+  };
+
+  return (
+    <SoftCard title="Focus music" right={<Music2Icon className="h-4 w-4 text-pink-500" />}>
+        <div className="space-y-3">
+          <div className="text-xs text-slate-600">
+            Paste a YouTube link to keep playing while plan.
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+          <Input
+            value={draft}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
+            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+              if (e.key === "Enter") updateSong();
+            }}
+            placeholder="e.g. https://youtu.be/abcd"
+            className="h-10 rounded-xl bg-white/80"
+          />
+          <Button
+            onClick={updateSong}
+            className="rounded-xl bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+          >
+            Play
+          </Button>
+        </div>
+        <div className="aspect-video overflow-hidden rounded-xl ring-1 ring-slate-100 bg-slate-50">
+          <iframe
+            key={embedUrl}
+            src={`${embedUrl}?modestbranding=1`}
+            title="Focus music"
+            className="h-full w-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </SoftCard>
+  );
+}
+
+function FloatingMusicPlayer({ musicQuery }: { musicQuery: string }) {
+  const [open, setOpen] = useState(true);
+  const embedUrl = useMemo(() => buildYouTubeEmbedUrl(musicQuery), [musicQuery]);
+
+  return (
+    <div className="fixed bottom-4 right-4 z-40 max-w-sm w-[320px]">
+      <div className="rounded-2xl bg-white/90 backdrop-blur-sm ring-1 ring-pink-100 shadow-lg">
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <Music2Icon className="h-4 w-4 text-pink-500" />
+            <span>Focus music</span>
+          </div>
+          <Button
+            variant="outline"
+            className="rounded-full h-8 px-3"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? "Hide" : "Show"}
+          </Button>
+        </div>
+        <div
+          className={`overflow-hidden transition-all duration-200 ${
+            open ? "h-48 opacity-100" : "h-0 opacity-0 pointer-events-none"
+          }`}
+        >
+          <iframe
+            key={embedUrl}
+            src={`${embedUrl}?autoplay=1&modestbranding=1`}
+            title="Now playing"
+            className="h-48 w-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DailySpread({
   weekDates,
   tasks,
@@ -482,7 +810,7 @@ function DailySpread({
 }: {
   weekDates: string[]; // 7 ISO dates
   tasks: Task[];
-  onToggle: (id: number) => void;
+  onToggle: (id: string) => void;
 }) {
   const dayNames = weekDates.map((iso) =>
     new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" }),
@@ -556,11 +884,15 @@ function DailyPlanner({
   onToggle,
   checklistByDate,
   setChecklistByDate,
+  musicQuery,
+  setMusicQuery,
 }: {
   tasks: Task[];
-  onToggle: (id: number) => void;
+  onToggle: (id: string) => void;
   checklistByDate: ChecklistMap;
   setChecklistByDate: Dispatch<SetStateAction<ChecklistMap>>;
+  musicQuery: string;
+  setMusicQuery: (value: string) => void;
 }) {
   const [startDayISO, setStartDayISO] = useState(toISODate(new Date()));
   const [selectedDay, setSelectedDay] = useState(startDayISO);
@@ -578,7 +910,8 @@ function DailyPlanner({
     return weekDates.map((iso, i) => ({ day: labels[i], pct: percentCompleted(tasks.filter((t) => t.date === iso)) }));
   }, [tasks, weekDates]);
 
-  const monthYear = { year: start.getFullYear(), monthIndex: start.getMonth() };
+  const selectedDateObj = useMemo(() => new Date(`${selectedDay}T00:00:00`), [selectedDay]);
+  const monthYear = { year: selectedDateObj.getFullYear(), monthIndex: selectedDateObj.getMonth() };
 
   // Auto-roll to today at midnight so rankings/cards stay aligned with the current date
   useEffect(() => {
@@ -620,6 +953,7 @@ function DailyPlanner({
           </div>
         </div>
         <DailySpread weekDates={weekDates} tasks={tasks} onToggle={onToggle} />
+        <FocusMusicCard musicQuery={musicQuery} setMusicQuery={setMusicQuery} />
       </div>
     </div>
   );
@@ -634,7 +968,7 @@ function MonthlyPlanner({ tasks }: { tasks: Task[] }) {
   const monthTasks = tasks.filter((t) => t.date.startsWith(monthPrefix));
   const completed = monthTasks.filter((t) => t.status === "completed").length;
   const inProgress = Math.max(monthTasks.length - completed, 0);
-  const todo = monthTasks.filter((t) => t.status === "todo").length;
+  const todo = monthTasks.filter((t) => t.status === "planned" || t.status === "backlog").length;
   const dayTasks = tasks.filter((t) => t.date === selectedDate);
 
   return (
@@ -680,28 +1014,34 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
   );
 
   const updateWeekItem = <K extends keyof Task>(
-    id: number,
+    id: string,
     key: K,
     value: Task[K],
   ) => {
     setTasks((prev) =>
       prev
-        .map((t) => (t.id === id ? { ...t, [key]: value } : t))
+        .map((t) => (t.id === id ? updateTask(t, key, value) : t))
         .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)),
     );
   };
 
   const addWeekItem = (weekIndex: number) => {
     const day = weeks[weekIndex]?.[0] ?? toISODate(new Date());
+    const now = new Date().toISOString();
     const newItem: Task = {
-      id: Date.now() + Math.floor(Math.random() * 1000),
+      id: crypto.randomUUID(),
       title: "New item",
       category: "Task",
       date: day,
       time: "09:00",
-      status: "todo",
+      endTime: "10:00",
+      status: "planned",
       priority: "medium",
       note: "",
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      archivedAt: null,
     };
     setTasks((prev) => [...prev, newItem].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)));
   };
@@ -745,10 +1085,11 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
                         <th className="py-2 px-2 text-left">Type</th>
                         <th className="py-2 px-2 text-left">Title</th>
                         <th className="py-2 px-2 text-left">Day</th>
-                        <th className="py-2 px-2 text-left">Time</th>
+                        <th className="py-2 px-2 text-left">Start</th>
+                        <th className="py-2 px-2 text-left">End</th>
                         <th className="py-2 px-2 text-left">Note</th>
                         <th className="py-2 px-2 text-left">Priority</th>
-                        <th className="py-2 px-2 text-center">Delete</th>
+                        <th className="py-2 px-2 text-center">Archive</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -804,6 +1145,13 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
                           </td>
                           <td className="py-2 px-2">
                             <Input
+                              type="time"
+                              value={item.endTime ?? ""}
+                              onChange={(e) => updateWeekItem(item.id, "endTime", e.target.value)}
+                            />
+                          </td>
+                          <td className="py-2 px-2">
+                            <Input
                               value={item.note ?? ""}
                               onChange={(e) => updateWeekItem(item.id, "note", e.target.value)}
                             />
@@ -827,11 +1175,11 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
                               className="h-8 rounded-full px-3 text-xs text-slate-600 hover:text-red-600"
                               onClick={() =>
                                 setTasks((prev) =>
-                                  prev.filter((t) => t.id !== item.id),
+                                  prev.map((t) => (t.id === item.id ? archiveTask(t) : t)),
                                 )
                               }
                             >
-                              Delete
+                              Archive
                             </Button>
                           </td>
                         </tr>
@@ -920,9 +1268,13 @@ const sampleProjects: ProjectItem[] = [
 function ChecklistView({
   rows,
   setRows,
+  note,
+  setNote,
 }: {
   rows: ProjectItem[];
   setRows: Dispatch<SetStateAction<ProjectItem[]>>;
+  note: string;
+  setNote: (value: string) => void;
 }) {
   const today = new Date();
 
@@ -973,135 +1325,149 @@ function ChecklistView({
   };
 
   return (
-    <div className="rounded-2xl bg-white/80 backdrop-blur-sm ring-1 ring-pink-100 shadow p-4">
-      <div className="mb-3">
-        <BunStrip imgs={BUNS_CHECKLIST} />
-      </div>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <CardTitle className="text-lg">Checklist / Projects</CardTitle>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            className="rounded-full bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
-            onClick={addRow}
-          >
-            Add row
-          </Button>
-          <div className="text-xs text-slate-600">Start month, fields, priority, deadline math, status</div>
+    <div className="space-y-4">
+      <div className="rounded-2xl bg-white/80 backdrop-blur-sm ring-1 ring-pink-100 shadow p-4">
+        <div className="mb-3">
+          <BunStrip imgs={BUNS_CHECKLIST} />
+        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+          <CardTitle className="text-lg">Checklist / Projects</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              className="rounded-full bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90"
+              onClick={addRow}
+            >
+              Add row
+            </Button>
+            <div className="text-xs text-slate-600">Start month, fields, priority, deadline math, status</div>
+          </div>
+        </div>
+        <div className="overflow-auto">
+          <table className="min-w-full text-xs">
+            <thead className="text-slate-600">
+              <tr className="border-b border-slate-200">
+                <th className="py-2 px-2 text-left">Start month</th>
+                <th className="py-2 px-2 text-left">Field</th>
+                <th className="py-2 px-2 text-left">Project</th>
+                <th className="py-2 px-2 text-left">Task / Activity</th>
+                <th className="py-2 px-2 text-left">Priority</th>
+                <th className="py-2 px-2 text-left">File / Notes</th>
+                <th className="py-2 px-2 text-left">Hours</th>
+                <th className="py-2 px-2 text-center">Drop?</th>
+                <th className="py-2 px-2 text-left">Deadline (start → end)</th>
+                <th className="py-2 px-2 text-center">Progress</th>
+                <th className="py-2 px-2 text-left">Timeline</th>
+                <th className="py-2 px-2 text-left">Status</th>
+                <th className="py-2 px-2 text-center">Delete</th>
+              </tr>
+            </thead>
+            <tbody>
+              {withTimeline.map((r) => (
+                <tr key={r.id} className="border-b border-slate-100 hover:bg-pink-50/30 transition-colors">
+                  <td className="py-2 px-2">
+                    <Input
+                      type="month"
+                      value={r.start.slice(0, 7)}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        updateRow(r.id, "start", e.target.value ? `${e.target.value}-01` : "")
+                      }
+                    />
+                  </td>
+                  <td className="py-2 px-2">
+                    <Input value={r.field} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "field", e.target.value)} />
+                  </td>
+                  <td className="py-2 px-2">
+                    <Input value={r.project} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "project", e.target.value)} />
+                  </td>
+                  <td className="py-2 px-2">
+                    <Input value={r.task} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "task", e.target.value)} />
+                  </td>
+                  <td className="py-2 px-2 capitalize">
+                    <select
+                      className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                      value={r.priority}
+                      onChange={(e) => updateRow(r.id, "priority", e.target.value as ProjectItem["priority"])}
+                    >
+                      <option value="high">high</option>
+                      <option value="medium">medium</option>
+                      <option value="low">low</option>
+                    </select>
+                  </td>
+                  <td className="py-2 px-2">
+                    <Input value={r.notes} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "notes", e.target.value)} />
+                  </td>
+                  <td className="py-2 px-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      value={r.hours}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "hours", Number(e.target.value) || 0)}
+                    />
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <Checkbox checked={r.drop} onCheckedChange={() => updateRow(r.id, "drop", !r.drop)} />
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="flex flex-col gap-1">
+                      <Input
+                        type="date"
+                        value={r.start}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "start", e.target.value)}
+                      />
+                      <Input
+                        type="date"
+                        value={r.deadline}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "deadline", e.target.value)}
+                      />
+                    </div>
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <Checkbox checked={r.progress} onCheckedChange={() => updateRow(r.id, "progress", !r.progress)} />
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="text-[11px] text-slate-600">Working: {r.daysWorking}d</div>
+                    <div className="text-[11px] text-slate-600">Left: {r.daysLeft}d</div>
+                  </td>
+                  <td className="py-2 px-2">
+                    <select
+                      className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                      value={r.status}
+                      onChange={(e) => updateRow(r.id, "status", e.target.value as ProjectStatus)}
+                    >
+                      <option value="Planned">Planned</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="Blocked">Blocked</option>
+                      <option value="Done">Done</option>
+                    </select>
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <Button
+                      variant="outline"
+                      className="h-8 w-8 text-slate-500 hover:text-red-600"
+                      onClick={() => setRows((prev) => prev.filter((p) => p.id !== r.id))}
+                      aria-label="Delete row"
+                    >
+                      <Trash2Icon className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
-      <div className="overflow-auto">
-        <table className="min-w-full text-xs">
-          <thead className="text-slate-600">
-            <tr className="border-b border-slate-200">
-              <th className="py-2 px-2 text-left">Start month</th>
-              <th className="py-2 px-2 text-left">Field</th>
-              <th className="py-2 px-2 text-left">Project</th>
-              <th className="py-2 px-2 text-left">Task / Activity</th>
-              <th className="py-2 px-2 text-left">Priority</th>
-              <th className="py-2 px-2 text-left">File / Notes</th>
-              <th className="py-2 px-2 text-left">Hours</th>
-              <th className="py-2 px-2 text-center">Drop?</th>
-              <th className="py-2 px-2 text-left">Deadline (start → end)</th>
-              <th className="py-2 px-2 text-center">Progress</th>
-              <th className="py-2 px-2 text-left">Timeline</th>
-              <th className="py-2 px-2 text-left">Status</th>
-              <th className="py-2 px-2 text-center">Delete</th>
-            </tr>
-          </thead>
-          <tbody>
-            {withTimeline.map((r) => (
-              <tr key={r.id} className="border-b border-slate-100 hover:bg-pink-50/30 transition-colors">
-                <td className="py-2 px-2">
-                  <Input
-                    type="month"
-                    value={r.start.slice(0, 7)}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      updateRow(r.id, "start", e.target.value ? `${e.target.value}-01` : "")
-                    }
-                  />
-                </td>
-                <td className="py-2 px-2">
-                  <Input value={r.field} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "field", e.target.value)} />
-                </td>
-                <td className="py-2 px-2">
-                  <Input value={r.project} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "project", e.target.value)} />
-                </td>
-                <td className="py-2 px-2">
-                  <Input value={r.task} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "task", e.target.value)} />
-                </td>
-                <td className="py-2 px-2 capitalize">
-                  <select
-                    className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
-                    value={r.priority}
-                    onChange={(e) => updateRow(r.id, "priority", e.target.value as ProjectItem["priority"])}
-                  >
-                    <option value="high">high</option>
-                    <option value="medium">medium</option>
-                    <option value="low">low</option>
-                  </select>
-                </td>
-                <td className="py-2 px-2">
-                  <Input value={r.notes} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "notes", e.target.value)} />
-                </td>
-                <td className="py-2 px-2">
-                  <Input
-                    type="number"
-                    min={0}
-                    value={r.hours}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "hours", Number(e.target.value) || 0)}
-                  />
-                </td>
-                <td className="py-2 px-2 text-center">
-                  <Checkbox checked={r.drop} onCheckedChange={() => updateRow(r.id, "drop", !r.drop)} />
-                </td>
-                <td className="py-2 px-2">
-                  <div className="flex flex-col gap-1">
-                    <Input
-                      type="date"
-                      value={r.start}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "start", e.target.value)}
-                    />
-                    <Input
-                      type="date"
-                      value={r.deadline}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => updateRow(r.id, "deadline", e.target.value)}
-                    />
-                  </div>
-                </td>
-                <td className="py-2 px-2 text-center">
-                  <Checkbox checked={r.progress} onCheckedChange={() => updateRow(r.id, "progress", !r.progress)} />
-                </td>
-                <td className="py-2 px-2">
-                  <div className="text-[11px] text-slate-600">Working: {r.daysWorking}d</div>
-                  <div className="text-[11px] text-slate-600">Left: {r.daysLeft}d</div>
-                </td>
-                <td className="py-2 px-2">
-                  <select
-                    className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
-                    value={r.status}
-                    onChange={(e) => updateRow(r.id, "status", e.target.value as ProjectStatus)}
-                  >
-                    <option value="Planned">Planned</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Blocked">Blocked</option>
-                    <option value="Done">Done</option>
-                  </select>
-                </td>
-                <td className="py-2 px-2 text-center">
-                  <Button
-                    variant="outline"
-                    className="h-8 w-8 text-slate-500 hover:text-red-600"
-                    onClick={() => setRows((prev) => prev.filter((p) => p.id !== r.id))}
-                    aria-label="Delete row"
-                  >
-                    <Trash2Icon className="h-4 w-4" />
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="rounded-2xl bg-white/70 ring-1 ring-slate-100 p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-700">Carry-over note</div>
+          <div className="text-[11px] text-slate-500">Use this to remember what to check each week</div>
+        </div>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. Follow up with recruiter about the interview on Tuesday"
+          className="w-full min-h-[100px] rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-pink-200"
+        />
       </div>
     </div>
   );
@@ -1117,22 +1483,40 @@ function guessCategory(title: string) {
   return "General";
 }
 
-function mapEventToTask(e: any, idx: number): Task | null {
+function mapEventToTask(e: any, _idx: number): Task | null {
   const startISO = e.start?.dateTime ?? (e.start?.date ? `${e.start.date}T00:00:00` : null);
+  const endISO = e.end?.dateTime ?? (e.end?.date ? `${e.end.date}T00:00:00` : null);
   if (!startISO) return null;
 
   const d = new Date(startISO);
+  const end = endISO ? new Date(endISO) : null;
   const date = toISODate(d);
   const time = getEventStartTimeHHMM(e);
+  let durationMins: number | undefined;
+  let endTime: string | undefined;
+  if (end) {
+    const diff = Math.max(0, end.getTime() - d.getTime());
+    durationMins = Math.max(15, Math.round(diff / (1000 * 60)));
+    const hh = String(end.getHours()).padStart(2, "0");
+    const mm = String(end.getMinutes()).padStart(2, "0");
+    endTime = `${hh}:${mm}`;
+  }
 
+  const now = new Date().toISOString();
   return {
-    id: Date.now() + idx,
+    id: crypto.randomUUID(),
     title: e.summary ?? "(No title)",
     date,
     time,
-    status: "todo",
+    endTime,
+    durationMins,
+    status: "planned",
     priority: "medium",
     category: guessCategory(e.summary ?? ""),
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+    archivedAt: null,
   };
 }
 
@@ -1159,8 +1543,8 @@ function GoogleCalendarView({
   const monthPrefix = selectedDate.slice(0, 7);
   const monthTasks = useMemo(() => tasks.filter((t) => t.date.startsWith(monthPrefix)), [tasks, monthPrefix]);
 
-  const makeKey = (title: string, dateISO: string, timeHHMM: string) =>
-    `${dateISO}-${timeHHMM}-${title}`.toLowerCase();
+  const makeKey = (title: string, dateISO: string, timeHHMM: string, endHHMM?: string) =>
+    `${dateISO}-${timeHHMM}-${endHHMM ?? ""}-${title}`.toLowerCase();
 
   const fetchExistingKeys = async (timeMinISO: string, timeMaxISO: string) => {
     const events = await listPrimaryEvents({
@@ -1171,12 +1555,18 @@ function GoogleCalendarView({
     const keys = new Set<string>();
     events.forEach((e) => {
       const startISO = e.start?.dateTime ?? (e.start?.date ? `${e.start.date}T00:00:00` : null);
+      const endISO = e.end?.dateTime ?? (e.end?.date ? `${e.end.date}T00:00:00` : null);
       if (!startISO) return;
       const d = new Date(startISO);
+      const end = endISO ? new Date(endISO) : null;
       const date = toISODate(d);
       const time = getEventStartTimeHHMM(e);
       const title = e.summary ?? "";
-      keys.add(makeKey(title, date, time));
+      let endTime: string | undefined;
+      if (end) {
+        endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+      }
+      keys.add(makeKey(title, date, time, endTime));
     });
     return keys;
   };
@@ -1239,11 +1629,12 @@ function GoogleCalendarView({
         const existingDay = prev.filter((t) => t.date === selectedDate);
         const mergedMap = new Map<string, Task>();
 
-        const makeKey = (t: Task) => `${t.date}-${t.time}-${t.title}`.toLowerCase();
+        const makeKey = (t: Task) =>
+          `${t.date}-${t.time}-${t.endTime ?? ""}-${t.title}`.toLowerCase();
         existingDay.forEach((t) => mergedMap.set(makeKey(t), t));
         mapped.forEach((t) => {
           const key = makeKey(t);
-          if (!mergedMap.has(key)) mergedMap.set(key, t);
+          if (!mergedMap.has(key)) mergedMap.set(key, t as Task);
         });
 
         const mergedDay = Array.from(mergedMap.values()).sort((a, b) =>
@@ -1274,8 +1665,12 @@ function GoogleCalendarView({
       let pushed = 0;
       for (const t of dayTasks) {
         const startISO = new Date(`${t.date}T${t.time || "00:00"}:00`).toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
-        const key = makeKey(t.title, t.date, t.time || "00:00");
+        const durationMs = (t.durationMins ?? 60) * 60 * 1000;
+        const endISO = t.endTime
+          ? new Date(`${t.date}T${t.endTime}:00`).toISOString()
+          : new Date(new Date(startISO).getTime() + durationMs).toISOString();
+        const endHHMM = t.endTime ?? endISO.substring(11, 16);
+        const key = makeKey(t.title, t.date, t.time || "00:00", endHHMM);
         if (existing.has(key)) continue;
         await createPrimaryEvent({
           accessToken,
@@ -1311,8 +1706,12 @@ function GoogleCalendarView({
       let pushed = 0;
       for (const t of monthTasks) {
         const startISO = new Date(`${t.date}T${t.time || "00:00"}:00`).toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
-        const key = makeKey(t.title, t.date, t.time || "00:00");
+        const durationMs = (t.durationMins ?? 60) * 60 * 1000;
+        const endISO = t.endTime
+          ? new Date(`${t.date}T${t.endTime}:00`).toISOString()
+          : new Date(new Date(startISO).getTime() + durationMs).toISOString();
+        const endHHMM = t.endTime ?? endISO.substring(11, 16);
+        const key = makeKey(t.title, t.date, t.time || "00:00", endHHMM);
         if (existing.has(key)) continue;
         await createPrimaryEvent({
           accessToken,
@@ -1333,18 +1732,15 @@ function GoogleCalendarView({
     }
   };
 
-  const toggleTaskDone = (id: number) => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === id ? { ...t, status: t.status === "completed" ? "todo" : "completed" } : t,
-      ),
-    );
+  const toggleTaskDone = (id: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? completeTask(t) : t)));
   };
 
-  const clearDay = () => setTasks((prev) => prev.filter((t) => t.date !== selectedDate));
+  const clearDay = () =>
+    setTasks((prev) => prev.map((t) => (t.date === selectedDate ? archiveTask(t) : t)));
 
-  const updateTaskPriority = (id: number, priority: Task["priority"]) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, priority } : t)));
+  const updateTaskPriority = (id: string, priority: Task["priority"]) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? updateTask(t, "priority", priority) : t)));
   };
 
   const selectedDateObj = new Date(`${selectedDate}T00:00:00`);
@@ -1354,7 +1750,7 @@ function GoogleCalendarView({
     <div className="min-h-screen p-4 sm:p-6 relative">
       <div
         className="absolute inset-0 bg-cover bg-center bg-fixed blur-sm"
-        style={{ backgroundImage: "url(/bg.jpg)" }}
+        style={{ backgroundImage: `url(${bgImg})` }}
       />
       <div className="absolute inset-0 bg-white/30" />
       <div className="relative">
@@ -1398,7 +1794,7 @@ function GoogleCalendarView({
               variant="outline"
               onClick={clearDay}
             >
-              Clear Day
+              Archive Day
             </Button>
           </div>
 
@@ -1497,6 +1893,250 @@ function GoogleCalendarView({
   );
 }
 
+function formatTimestamp(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function lifecycleDate(task: Task) {
+  return task.status === "archived"
+    ? task.archivedAt ?? task.completedAt ?? `${task.date}T${task.time}`
+    : task.completedAt ?? `${task.date}T${task.time}`;
+}
+
+function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () => void }) {
+  if (!task) return null;
+  const details = [
+    ["Status", task.status],
+    ["Scheduled date", task.date],
+    ["Start time", task.time],
+    ["End time", task.endTime ?? "—"],
+    ["Duration", task.durationMins ? `${task.durationMins} minutes` : "—"],
+    ["Category", task.category],
+    ["Priority", task.priority],
+    ["Tags", task.tags?.length ? task.tags.join(", ") : "—"],
+    ["Description", task.description ?? "—"],
+    ["Notes", task.note ?? "—"],
+    ["Created", formatTimestamp(task.createdAt)],
+    ["Updated", formatTimestamp(task.updatedAt)],
+    ["Completed", formatTimestamp(task.completedAt)],
+    ["Archived", formatTimestamp(task.archivedAt)],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4" role="presentation" onMouseDown={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-details-title"
+        className="max-h-[85vh] w-full max-w-xl overflow-auto rounded-2xl bg-white/95 p-5 shadow-xl ring-1 ring-pink-100 backdrop-blur-sm"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Task details</div>
+            <h2 id="task-details-title" className="text-lg font-semibold text-slate-800">{task.title}</h2>
+          </div>
+          <Button variant="outline" className="rounded-full bg-white/80" onClick={onClose}>Close</Button>
+        </div>
+        <dl className="grid gap-3 sm:grid-cols-2">
+          {details.map(([label, value]) => (
+            <div key={label} className="rounded-xl bg-pink-50/40 px-3 py-2 ring-1 ring-pink-100">
+              <dt className="text-[11px] text-slate-500">{label}</dt>
+              <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+type ArchiveSort = "newest" | "oldest" | "recently-completed" | "recently-archived";
+
+function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
+  const [priority, setPriority] = useState("");
+  const [completionDate, setCompletionDate] = useState("");
+  const [archiveDate, setArchiveDate] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [sort, setSort] = useState<ArchiveSort>("recently-archived");
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+
+  const allArchivedTasks = useMemo(() => tasks.filter((task) => task.status === "archived"), [tasks]);
+  const categories = useMemo(
+    () => Array.from(new Set(allArchivedTasks.map((task) => task.category))).sort(),
+    [allArchivedTasks],
+  );
+  const archivedTasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const filtered = allArchivedTasks.filter((task) => {
+      const searchable = [task.title, task.description, task.note, ...(task.tags ?? [])]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase();
+      return (
+        (!normalizedQuery || searchable.includes(normalizedQuery)) &&
+        (!category || task.category === category) &&
+        (!priority || task.priority === priority) &&
+        (!completionDate || task.completedAt?.slice(0, 10) === completionDate) &&
+        (!archiveDate || task.archivedAt?.slice(0, 10) === archiveDate) &&
+        (!scheduledDate || task.date === scheduledDate)
+      );
+    });
+    const valueForSort = (task: Task) => {
+      if (sort === "recently-completed") return task.completedAt ?? "";
+      if (sort === "recently-archived") return task.archivedAt ?? "";
+      return `${task.date}T${task.time}`;
+    };
+    return filtered.sort((a, b) =>
+      sort === "oldest"
+        ? valueForSort(a).localeCompare(valueForSort(b))
+        : valueForSort(b).localeCompare(valueForSort(a)),
+    );
+  }, [allArchivedTasks, archiveDate, category, completionDate, priority, query, scheduledDate, sort]);
+
+  const permanentlyDelete = (task: Task) => {
+    const confirmed = window.confirm(
+      `Permanently delete “${task.title}”? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setTasks((prev) => prev.filter((candidate) => candidate.id !== task.id));
+  };
+
+  return (
+    <div className="space-y-4 px-2">
+      <BunStrip imgs={BUNS_MONTHLY} />
+      <SoftCard title="Archived Tasks" right={<Trash2Icon className="h-4 w-4 text-slate-500" />}>
+        {allArchivedTasks.length === 0 ? (
+          <div className="text-sm text-slate-500">No archived tasks.</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, description, notes, tags" className="rounded-xl bg-white/80 lg:col-span-2" />
+              <select value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                <option value="">All categories</option>
+                {categories.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+              <select value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                <option value="">All priorities</option>
+                <option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
+              </select>
+              <label className="text-[11px] text-slate-500">Completed<Input type="date" value={completionDate} onChange={(event) => setCompletionDate(event.target.value)} className="mt-1 rounded-xl bg-white/80" /></label>
+              <label className="text-[11px] text-slate-500">Archived<Input type="date" value={archiveDate} onChange={(event) => setArchiveDate(event.target.value)} className="mt-1 rounded-xl bg-white/80" /></label>
+              <label className="text-[11px] text-slate-500">Originally scheduled<Input type="date" value={scheduledDate} onChange={(event) => setScheduledDate(event.target.value)} className="mt-1 rounded-xl bg-white/80" /></label>
+              <label className="text-[11px] text-slate-500">Sort<select value={sort} onChange={(event) => setSort(event.target.value as ArchiveSort)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                <option value="newest">Newest scheduled</option><option value="oldest">Oldest scheduled</option><option value="recently-completed">Recently completed</option><option value="recently-archived">Recently archived</option>
+              </select></label>
+            </div>
+            {archivedTasks.length === 0 ? <div className="text-sm text-slate-500">No archived tasks match these filters.</div> : null}
+            {archivedTasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex flex-col gap-3 rounded-2xl bg-white/70 px-4 py-3 ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <button type="button" className="text-left" onClick={() => setSelectedTask(task)}>
+                  <div className="text-sm font-medium text-slate-700">{task.title}</div>
+                  <div className="text-xs text-slate-500">
+                    {task.date} • {task.time} • {task.category}
+                  </div>
+                </button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="rounded-full bg-white/80 text-slate-700"
+                    onClick={() =>
+                      setTasks((prev) => prev.map((item) => (item.id === task.id ? restoreTask(item) : item)))
+                    }
+                  >
+                    Restore
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-full bg-white/80 text-slate-600 hover:text-red-600"
+                    onClick={() => permanentlyDelete(task)}
+                  >
+                    Delete permanently
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SoftCard>
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} />
+    </div>
+  );
+}
+
+function HistoryView({ tasks }: { tasks: Task[] }) {
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const monthKey = `${visibleMonth.getFullYear()}-${pad2(visibleMonth.getMonth() + 1)}`;
+  const monthTasks = useMemo(
+    () => tasks
+      .filter((task) => (task.status === "completed" || task.status === "archived") && lifecycleDate(task).slice(0, 7) === monthKey)
+      .slice()
+      .sort((a, b) => lifecycleDate(b).localeCompare(lifecycleDate(a))),
+    [monthKey, tasks],
+  );
+  const moveMonth = (amount: number) => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1));
+  const moveYear = (amount: number) => setVisibleMonth((current) => new Date(current.getFullYear() + amount, current.getMonth(), 1));
+
+  return (
+    <div className="space-y-4 px-2">
+      <BunStrip imgs={BUNS_MONTHLY} />
+      <SoftCard title="Task History" right={<CalendarDaysIcon className="h-4 w-4 text-pink-600" />}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => moveYear(-1)}>Previous year</Button>
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => moveMonth(-1)}>Previous month</Button>
+          </div>
+          <div className="rounded-full bg-pink-50 px-4 py-2 text-sm font-semibold text-slate-700 ring-1 ring-pink-100">
+            {visibleMonth.toLocaleString("default", { month: "long", year: "numeric" })}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => moveMonth(1)}>Next month</Button>
+            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => moveYear(1)}>Next year</Button>
+          </div>
+        </div>
+        <section aria-labelledby={`history-${monthKey}`}>
+          <h3 id={`history-${monthKey}`} className="mb-2 text-sm font-semibold text-slate-700">
+            {visibleMonth.toLocaleString("default", { month: "long", year: "numeric" })}
+          </h3>
+          {monthTasks.length === 0 ? (
+            <div className="text-sm text-slate-500">No completed or archived tasks in this month.</div>
+          ) : (
+            <div className="space-y-2">
+              {monthTasks.map((task) => (
+                <button
+                  type="button"
+                  key={task.id}
+                  onClick={() => setSelectedTask(task)}
+                  className="flex w-full flex-col gap-1 rounded-2xl bg-white/70 px-4 py-3 text-left ring-1 ring-slate-100 transition-colors hover:bg-pink-50/50"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-slate-700">{task.title}</span>
+                    <span className="rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-pink-100">{task.status}</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{task.date} • {task.category} • {task.priority}</span>
+                  {task.note ? <span className="line-clamp-2 text-xs text-slate-600">{task.note}</span> : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      </SoftCard>
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} />
+    </div>
+  );
+}
+
 export default function PlannerAppV2() {
   const [view, setView] = useState<View>("daily");
   const [tasks, setTasks] = useState<Task[]>(sampleTasks);
@@ -1505,28 +2145,56 @@ export default function PlannerAppV2() {
   const [checklistHydrated, setChecklistHydrated] = useState(false);
   const [projects, setProjects] = useState<ProjectItem[]>(sampleProjects);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
+  const [checklistNote, setChecklistNote] = useState("");
+  const [checklistNoteHydrated, setChecklistNoteHydrated] = useState(false);
+  const [musicQuery, setMusicQuery] = useState(DEFAULT_MUSIC_QUERY);
+  const [musicHydrated, setMusicHydrated] = useState(false);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const [googleTokenClient, setGoogleTokenClient] = useState<any>(null);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [syncInitialized, setSyncInitialized] = useState(false);
+  const [syncState, setSyncState] = useState<"saved" | "saving" | "offline" | "sync error">(
+    navigator.onLine ? "saved" : "offline",
+  );
+  const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
+  const [syncRetry, setSyncRetry] = useState(0);
+  const initializingUserRef = useRef<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const raw = localStorage.getItem(TASKS_STORAGE_KEY);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as Task[];
-        if (Array.isArray(parsed)) {
-          setTasks(parsed);
-        }
-      } catch (err) {
-        console.error("Failed to parse saved tasks", err);
-      }
+    if (!raw) {
+      setHydrated(true);
+      return;
     }
-    setHydrated(true);
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      setTasks(migrateTasks(parsed));
+      setHydrated(true);
+    } catch (err) {
+      console.error("Failed to parse or migrate saved tasks; original storage was preserved", err);
+    }
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks, hydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(MUSIC_STORAGE_KEY);
+    if (raw) {
+      setMusicQuery(raw);
+    }
+    setMusicHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!musicHydrated) return;
+    localStorage.setItem(MUSIC_STORAGE_KEY, musicQuery);
+  }, [musicQuery, musicHydrated]);
 
   useEffect(() => {
     const raw = localStorage.getItem(CHECKLIST_STORAGE_KEY);
@@ -1574,21 +2242,123 @@ export default function PlannerAppV2() {
     localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
   }, [projects, projectsHydrated]);
 
-  const toggleTask = (id: number) => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? { ...t, status: t.status === "completed" ? "todo" : "completed" }
-          : t,
-      ),
-    );
+  useEffect(() => {
+    const raw = localStorage.getItem(CHECKLIST_NOTE_STORAGE_KEY);
+    if (raw) {
+      setChecklistNote(raw);
+    }
+    setChecklistNoteHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!checklistNoteHydrated) return;
+    localStorage.setItem(CHECKLIST_NOTE_STORAGE_KEY, checklistNote);
+  }, [checklistNote, checklistNoteHydrated]);
+
+  useEffect(() => observeFirebaseUser((user) => {
+    currentUserIdRef.current = user?.uid ?? null;
+    setFirebaseUser(user);
+    setSyncInitialized(false);
+    initializingUserRef.current = null;
+    setAuthReady(true);
+  }), []);
+
+  useEffect(() => {
+    const updateConnectionState = () => {
+      if (!navigator.onLine) setSyncState("offline");
+      else if (!firebaseUser) setSyncState("saved");
+      setSyncRetry((value) => value + 1);
+    };
+    window.addEventListener("online", updateConnectionState);
+    window.addEventListener("offline", updateConnectionState);
+    return () => {
+      window.removeEventListener("online", updateConnectionState);
+      window.removeEventListener("offline", updateConnectionState);
+    };
+  }, [firebaseUser]);
+
+  const preferences = useMemo<PlannerPreferences>(() => ({
+    musicQuery,
+    checklistByDate,
+    projects,
+    checklistNote,
+  }), [checklistByDate, checklistNote, musicQuery, projects]);
+
+  const allLocalDataHydrated = hydrated && musicHydrated && checklistHydrated && projectsHydrated && checklistNoteHydrated;
+
+  useEffect(() => {
+    if (!firebaseUser || !allLocalDataHydrated || !navigator.onLine || syncInitialized) return;
+    if (initializingUserRef.current === firebaseUser.uid) return;
+    initializingUserRef.current = firebaseUser.uid;
+
+    const initializeSync = async () => {
+      setSyncState("saving");
+      try {
+        const remotePreferences = await getUserPreferences(firebaseUser.uid);
+        const migrationComplete = remotePreferences?.localMigrationComplete === true;
+        if (!migrationComplete) {
+          setMigrationMessage(`Found ${tasks.length} local task(s). Migrating to Firestore…`);
+          await migrateLocalData(firebaseUser.uid, tasks, preferences);
+          if (currentUserIdRef.current === firebaseUser.uid) {
+            setMigrationMessage(`Migrated and verified ${tasks.length} local task(s).`);
+          }
+        } else if (remotePreferences) {
+          if (typeof remotePreferences.musicQuery === "string") setMusicQuery(remotePreferences.musicQuery);
+          if (remotePreferences.checklistByDate && typeof remotePreferences.checklistByDate === "object") {
+            setChecklistByDate(remotePreferences.checklistByDate as ChecklistMap);
+          }
+          if (Array.isArray(remotePreferences.projects)) setProjects(remotePreferences.projects as ProjectItem[]);
+          if (typeof remotePreferences.checklistNote === "string") setChecklistNote(remotePreferences.checklistNote);
+        }
+
+        const remoteTasks = await loadUserTasks(firebaseUser.uid);
+        if (currentUserIdRef.current !== firebaseUser.uid) return;
+        setTasks((localTasks) => mergeTaskCopies(localTasks, remoteTasks));
+        setSyncInitialized(true);
+        setSyncState("saved");
+      } catch (error) {
+        console.error("Firebase initial synchronization failed", error);
+        if (currentUserIdRef.current === firebaseUser.uid) {
+          initializingUserRef.current = null;
+          setSyncState(navigator.onLine ? "sync error" : "offline");
+        }
+      }
+    };
+
+    void initializeSync();
+  }, [allLocalDataHydrated, firebaseUser, preferences, syncInitialized, syncRetry, tasks]);
+
+  useEffect(() => {
+    if (!firebaseUser || !syncInitialized) return;
+    if (!navigator.onLine) {
+      setSyncState("offline");
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setSyncState("saving");
+      syncQueueRef.current = syncQueueRef.current
+        .catch(() => undefined)
+        .then(() => syncUserData(firebaseUser.uid, tasks, preferences))
+        .then(() => setSyncState("saved"))
+        .catch((error) => {
+          console.error("Firebase synchronization failed", error);
+          setSyncState(navigator.onLine ? "sync error" : "offline");
+        });
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [firebaseUser, preferences, syncInitialized, syncRetry, tasks]);
+
+  const toggleTask = (id: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? completeTask(t) : t)));
   };
+
+  const activeTasks = tasks.filter((task) => task.status !== "archived");
 
   return (
     <div className="min-h-screen p-4 sm:p-6 relative">
       <div
         className="absolute inset-0 bg-cover bg-center bg-fixed blur-sm"
-        style={{ backgroundImage: "url(/bg.jpg)" }}
+        style={{ backgroundImage: `url(${bgImg})` }}
       />
       <div className="absolute inset-0 bg-white/30" />
       <div className="relative">
@@ -1603,7 +2373,7 @@ export default function PlannerAppV2() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(
               [
                 { key: "daily", label: "Daily" },
@@ -1611,6 +2381,8 @@ export default function PlannerAppV2() {
                 { key: "monthly", label: "Monthly" },
                 { key: "google", label: "Google" },
                 { key: "checklist", label: "Checklist" },
+                { key: "archive", label: "Archive" },
+                { key: "history", label: "History" },
               ] as Array<{ key: View; label: string }>
             ).map((b) => (
               <Button
@@ -1622,22 +2394,48 @@ export default function PlannerAppV2() {
                 {b.label}
               </Button>
             ))}
+            {firebaseEnabled && authReady ? (
+              firebaseUser ? (
+                <>
+                  <span className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
+                    {firebaseUser.displayName ?? firebaseUser.email ?? "Signed in"} • {syncState}
+                  </span>
+                  {syncState === "sync error" ? (
+                    <Button variant="outline" className="rounded-full bg-white/80" onClick={() => setSyncRetry((value) => value + 1)}>Retry sync</Button>
+                  ) : null}
+                  <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signOutFirebase()}>Sign out</Button>
+                </>
+              ) : (
+                <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signInWithGoogle().catch((error) => {
+                  console.error("Google sign-in failed", error);
+                  setSyncState("sync error");
+                })}>Sign in with Google</Button>
+              )
+            ) : null}
           </div>
         </header>
 
+        {migrationMessage && firebaseUser ? (
+          <div className="mb-4 rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-700 ring-1 ring-pink-100">
+            {migrationMessage}
+          </div>
+        ) : null}
+
         {view === "daily" && (
           <DailyPlanner
-            tasks={tasks}
+            tasks={activeTasks}
             onToggle={toggleTask}
             checklistByDate={checklistByDate}
             setChecklistByDate={setChecklistByDate}
+            musicQuery={musicQuery}
+            setMusicQuery={setMusicQuery}
           />
         )}
-        {view === "weekly" && <WeeklyPlanner tasks={tasks} setTasks={setTasks} />}
-        {view === "monthly" && <MonthlyPlanner tasks={tasks} />}
+        {view === "weekly" && <WeeklyPlanner tasks={activeTasks} setTasks={setTasks} />}
+        {view === "monthly" && <MonthlyPlanner tasks={activeTasks} />}
         {view === "google" && (
           <GoogleCalendarView
-            tasks={tasks}
+            tasks={activeTasks}
             setTasks={setTasks}
             accessToken={googleAccessToken}
             setAccessToken={setGoogleAccessToken}
@@ -1645,9 +2443,19 @@ export default function PlannerAppV2() {
             setTokenClient={setGoogleTokenClient}
           />
         )}
-        {view === "checklist" && <ChecklistView rows={projects} setRows={setProjects} />}
+        {view === "checklist" && (
+          <ChecklistView
+            rows={projects}
+            setRows={setProjects}
+            note={checklistNote}
+            setNote={setChecklistNote}
+          />
+        )}
+        {view === "archive" && <ArchiveView tasks={tasks} setTasks={setTasks} />}
+        {view === "history" && <HistoryView tasks={tasks} />}
       </div>
       </div>
+      <FloatingMusicPlayer musicQuery={musicQuery} />
     </div>
   );
 }

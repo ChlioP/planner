@@ -1,5 +1,19 @@
 # React + TypeScript + Vite
 
+## Optional Firebase synchronization
+
+The planner remains fully usable with its existing localStorage cache when Firebase is not configured.
+To enable Google sign-in and per-user Firestore synchronization:
+
+1. Create a Firebase web app and enable Google in Authentication.
+2. Create a Cloud Firestore database.
+3. Copy `.env.example` to `.env.local` and fill in the public Firebase web-app values.
+4. Deploy `firestore.rules` with the Firebase CLI before using synchronization in production.
+
+Tasks are stored at `users/{userId}/tasks/{taskId}` and preferences at
+`users/{userId}/settings/preferences`. Do not add Firebase Admin SDK service-account credentials to
+frontend environment files.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
