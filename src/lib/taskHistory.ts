@@ -94,6 +94,21 @@ export function migrateTasks(value: unknown, now = new Date().toISOString()): Ta
   return value.map((task) => migrateTask(task as LegacyTask, now));
 }
 
+type NewTask = Omit<TaskRecord, "id" | "createdAt" | "updatedAt" | "completedAt" | "archivedAt"> & {
+  id?: string;
+};
+
+export function createTask(task: NewTask, now = new Date().toISOString()): TaskRecord {
+  return {
+    ...task,
+    id: task.id ?? crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    completedAt: task.status === "completed" ? now : null,
+    archivedAt: task.status === "archived" ? now : null,
+  };
+}
+
 export function completeTask(task: TaskRecord, now = new Date().toISOString()): TaskRecord {
   if (task.status === "completed") {
     return { ...task, status: "planned", completedAt: null, updatedAt: now };
@@ -129,4 +144,8 @@ export function updateTask<K extends keyof TaskRecord>(
   now = new Date().toISOString(),
 ): TaskRecord {
   return { ...task, [key]: value, updatedAt: now };
+}
+
+export function permanentlyDeleteTask(tasks: TaskRecord[], id: string): TaskRecord[] {
+  return tasks.filter((task) => task.id !== id);
 }

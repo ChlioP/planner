@@ -19,5 +19,9 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // This SPA intentionally hydrates React state from browser storage in mount effects.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

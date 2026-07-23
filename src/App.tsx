@@ -30,10 +30,13 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { listPrimaryEvents, getEventStartTimeHHMM, toISODate, createPrimaryEvent } from "@/lib/googleCalendar";
+import type { GoogleCalendarEvent } from "@/lib/googleCalendar";
 import {
   archiveTask,
   completeTask,
+  createTask,
   migrateTasks,
+  permanentlyDeleteTask,
   restoreTask,
   updateTask,
   type TaskRecord,
@@ -80,8 +83,27 @@ type Task = TaskRecord;
 
 declare global {
   interface Window {
-    google?: any;
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient(options: {
+            client_id: string;
+            scope: string;
+            callback: (response: GoogleTokenResponse) => void;
+          }): GoogleTokenClient;
+        };
+      };
+    };
   }
+}
+
+interface GoogleTokenResponse {
+  access_token?: string;
+  error?: string;
+}
+
+interface GoogleTokenClient {
+  requestAccessToken(options: { prompt?: string }): void;
 }
 
 type View = "monthly" | "weekly" | "daily" | "google" | "checklist" | "archive" | "history";
@@ -118,6 +140,14 @@ const BUNS_CHECKLIST = [bun12, bun13, bun14, bun15];
 const BUNS_WEEKLY = [bun17, bun18, bun19, bun20];
 const BUNS_MONTHLY = [bun0, bun1, bun2, bun3];
 const DEFAULT_WEATHER_LOCATION = { lat: 16.0544, lon: 108.2022, label: "Da Nang, Vietnam" };
+
+function writeLocalStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.error(`Failed to save local planner data for ${key}`, error);
+  }
+}
 
 function extractYouTubeVideoId(input: string) {
   try {
@@ -769,7 +799,7 @@ function FloatingMusicPlayer({ musicQuery }: { musicQuery: string }) {
   const embedUrl = useMemo(() => buildYouTubeEmbedUrl(musicQuery), [musicQuery]);
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 max-w-sm w-[320px]">
+    <div className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] max-w-sm sm:w-[320px]">
       <div className="rounded-2xl bg-white/90 backdrop-blur-sm ring-1 ring-pink-100 shadow-lg">
         <div className="flex items-center justify-between gap-2 px-3 py-2">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -1027,9 +1057,7 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
 
   const addWeekItem = (weekIndex: number) => {
     const day = weeks[weekIndex]?.[0] ?? toISODate(new Date());
-    const now = new Date().toISOString();
-    const newItem: Task = {
-      id: crypto.randomUUID(),
+    const newItem = createTask({
       title: "New item",
       category: "Task",
       date: day,
@@ -1038,11 +1066,7 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
       status: "planned",
       priority: "medium",
       note: "",
-      createdAt: now,
-      updatedAt: now,
-      completedAt: null,
-      archivedAt: null,
-    };
+    });
     setTasks((prev) => [...prev, newItem].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)));
   };
 
@@ -1483,7 +1507,7 @@ function guessCategory(title: string) {
   return "General";
 }
 
-function mapEventToTask(e: any, _idx: number): Task | null {
+function mapEventToTask(e: GoogleCalendarEvent): Task | null {
   const startISO = e.start?.dateTime ?? (e.start?.date ? `${e.start.date}T00:00:00` : null);
   const endISO = e.end?.dateTime ?? (e.end?.date ? `${e.end.date}T00:00:00` : null);
   if (!startISO) return null;
@@ -1502,9 +1526,7 @@ function mapEventToTask(e: any, _idx: number): Task | null {
     endTime = `${hh}:${mm}`;
   }
 
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
+  return createTask({
     title: e.summary ?? "(No title)",
     date,
     time,
@@ -1513,11 +1535,7 @@ function mapEventToTask(e: any, _idx: number): Task | null {
     status: "planned",
     priority: "medium",
     category: guessCategory(e.summary ?? ""),
-    createdAt: now,
-    updatedAt: now,
-    completedAt: null,
-    archivedAt: null,
-  };
+  });
 }
 
 function GoogleCalendarView({
@@ -1532,8 +1550,8 @@ function GoogleCalendarView({
   setTasks: Dispatch<SetStateAction<Task[]>>;
   accessToken: string | null;
   setAccessToken: Dispatch<SetStateAction<string | null>>;
-  tokenClient: any;
-  setTokenClient: Dispatch<SetStateAction<any>>;
+  tokenClient: GoogleTokenClient | null;
+  setTokenClient: Dispatch<SetStateAction<GoogleTokenClient | null>>;
 }) {
   const [selectedDate, setSelectedDate] = useState<string>(toISODate(new Date()));
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -1580,7 +1598,7 @@ function GoogleCalendarView({
       const tc = window.google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
         scope: "https://www.googleapis.com/auth/calendar.events",
-        callback: (resp: any) => {
+        callback: (resp: GoogleTokenResponse) => {
           if (resp?.access_token) setAccessToken(resp.access_token);
         },
       });
@@ -1591,12 +1609,18 @@ function GoogleCalendarView({
 
     if (tryInit()) return;
 
+    let attempts = 0;
     const id = window.setInterval(() => {
+      attempts += 1;
       if (tryInit()) window.clearInterval(id);
+      else if (attempts >= 50) {
+        window.clearInterval(id);
+        setSyncError("Google Identity Services could not be loaded.");
+      }
     }, 200);
 
     return () => window.clearInterval(id);
-  }, []);
+  }, [setAccessToken, setTokenClient]);
 
   const connectGoogle = () => {
     if (!tokenClient) return;
@@ -1621,7 +1645,7 @@ function GoogleCalendarView({
       });
 
       const mapped = events
-        .map((e, idx) => mapEventToTask(e, idx))
+        .map(mapEventToTask)
         .filter(Boolean) as Task[];
 
       setTasks((prev) => {
@@ -1906,6 +1930,15 @@ function lifecycleDate(task: Task) {
 }
 
 function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () => void }) {
+  useEffect(() => {
+    if (!task) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, task]);
+
   if (!task) return null;
   const details = [
     ["Status", task.status],
@@ -1938,7 +1971,7 @@ function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () =
             <div className="text-[11px] uppercase tracking-wide text-slate-500">Task details</div>
             <h2 id="task-details-title" className="text-lg font-semibold text-slate-800">{task.title}</h2>
           </div>
-          <Button variant="outline" className="rounded-full bg-white/80" onClick={onClose}>Close</Button>
+          <Button autoFocus variant="outline" className="rounded-full bg-white/80" onClick={onClose}>Close</Button>
         </div>
         <dl className="grid gap-3 sm:grid-cols-2">
           {details.map(([label, value]) => (
@@ -2003,7 +2036,7 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
       `Permanently delete “${task.title}”? This cannot be undone.`,
     );
     if (!confirmed) return;
-    setTasks((prev) => prev.filter((candidate) => candidate.id !== task.id));
+    setTasks((prev) => permanentlyDeleteTask(prev, task.id));
   };
 
   return (
@@ -2015,12 +2048,12 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
         ) : (
           <div className="space-y-4">
             <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
-              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, description, notes, tags" className="rounded-xl bg-white/80 lg:col-span-2" />
-              <select value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+              <Input aria-label="Search archived tasks" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, description, notes, tags" className="rounded-xl bg-white/80 lg:col-span-2" />
+              <select aria-label="Filter archived tasks by category" value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
                 <option value="">All categories</option>
                 {categories.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
-              <select value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+              <select aria-label="Filter archived tasks by priority" value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
                 <option value="">All priorities</option>
                 <option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
               </select>
@@ -2150,12 +2183,12 @@ export default function PlannerAppV2() {
   const [musicQuery, setMusicQuery] = useState(DEFAULT_MUSIC_QUERY);
   const [musicHydrated, setMusicHydrated] = useState(false);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
-  const [googleTokenClient, setGoogleTokenClient] = useState<any>(null);
+  const [googleTokenClient, setGoogleTokenClient] = useState<GoogleTokenClient | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [syncInitialized, setSyncInitialized] = useState(false);
-  const [syncState, setSyncState] = useState<"saved" | "saving" | "offline" | "sync error">(
-    navigator.onLine ? "saved" : "offline",
+  const [syncState, setSyncState] = useState<"loading" | "saved" | "saving" | "offline" | "sync error">(
+    firebaseEnabled ? "loading" : navigator.onLine ? "saved" : "offline",
   );
   const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
   const [syncRetry, setSyncRetry] = useState(0);
@@ -2180,7 +2213,7 @@ export default function PlannerAppV2() {
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+    writeLocalStorage(TASKS_STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks, hydrated]);
 
   useEffect(() => {
@@ -2193,7 +2226,7 @@ export default function PlannerAppV2() {
 
   useEffect(() => {
     if (!musicHydrated) return;
-    localStorage.setItem(MUSIC_STORAGE_KEY, musicQuery);
+    writeLocalStorage(MUSIC_STORAGE_KEY, musicQuery);
   }, [musicQuery, musicHydrated]);
 
   useEffect(() => {
@@ -2206,6 +2239,7 @@ export default function PlannerAppV2() {
         }
       } catch (err) {
         console.error("Failed to parse saved checklist map", err);
+        return;
       }
     }
     // seed today if empty
@@ -2219,7 +2253,7 @@ export default function PlannerAppV2() {
 
   useEffect(() => {
     if (!checklistHydrated) return;
-    localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(checklistByDate));
+    writeLocalStorage(CHECKLIST_STORAGE_KEY, JSON.stringify(checklistByDate));
   }, [checklistByDate, checklistHydrated]);
 
   useEffect(() => {
@@ -2232,6 +2266,7 @@ export default function PlannerAppV2() {
         }
       } catch (err) {
         console.error("Failed to parse saved projects", err);
+        return;
       }
     }
     setProjectsHydrated(true);
@@ -2239,7 +2274,7 @@ export default function PlannerAppV2() {
 
   useEffect(() => {
     if (!projectsHydrated) return;
-    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    writeLocalStorage(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
   }, [projects, projectsHydrated]);
 
   useEffect(() => {
@@ -2252,7 +2287,7 @@ export default function PlannerAppV2() {
 
   useEffect(() => {
     if (!checklistNoteHydrated) return;
-    localStorage.setItem(CHECKLIST_NOTE_STORAGE_KEY, checklistNote);
+    writeLocalStorage(CHECKLIST_NOTE_STORAGE_KEY, checklistNote);
   }, [checklistNote, checklistNoteHydrated]);
 
   useEffect(() => observeFirebaseUser((user) => {
@@ -2394,16 +2429,23 @@ export default function PlannerAppV2() {
                 {b.label}
               </Button>
             ))}
-            {firebaseEnabled && authReady ? (
+            {firebaseEnabled && !authReady ? (
+              <span role="status" aria-live="polite" className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
+                Cloud sync • loading
+              </span>
+            ) : firebaseEnabled && authReady ? (
               firebaseUser ? (
                 <>
-                  <span className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
+                  <span role="status" aria-live="polite" className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
                     {firebaseUser.displayName ?? firebaseUser.email ?? "Signed in"} • {syncState}
                   </span>
                   {syncState === "sync error" ? (
                     <Button variant="outline" className="rounded-full bg-white/80" onClick={() => setSyncRetry((value) => value + 1)}>Retry sync</Button>
                   ) : null}
-                  <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signOutFirebase()}>Sign out</Button>
+                  <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signOutFirebase().catch((error) => {
+                    console.error("Firebase sign-out failed", error);
+                    setSyncState("sync error");
+                  })}>Sign out</Button>
                 </>
               ) : (
                 <Button variant="outline" className="rounded-full bg-white/80" onClick={() => void signInWithGoogle().catch((error) => {
@@ -2416,7 +2458,7 @@ export default function PlannerAppV2() {
         </header>
 
         {migrationMessage && firebaseUser ? (
-          <div className="mb-4 rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-700 ring-1 ring-pink-100">
+          <div role="status" aria-live="polite" className="mb-4 rounded-xl bg-white/80 px-4 py-3 text-sm text-slate-700 ring-1 ring-pink-100">
             {migrationMessage}
           </div>
         ) : null}
