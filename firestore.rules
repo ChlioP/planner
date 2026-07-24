@@ -2,8 +2,179 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function owns(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/{collectionId}/{document=**} {
+      allow read, delete: if owns(userId);
+      allow create, update: if owns(userId)
+        && !request.resource.data.keys().hasAny(["apiKey", "providerApiKey", "accessToken", "refreshToken", "clientSecret", "hiddenPrompt", "chainOfThought"])
+        && (
+          collectionId != "calendarConnections"
+          || (
+            request.resource.data.provider == "google"
+            && !request.resource.data.keys().hasAny(["accessToken", "refreshToken", "clientSecret"])
+          )
+        )
+        && (
+          collectionId != "calendarSyncSettings"
+          || (
+            document == "google"
+            && !request.resource.data.keys().hasAny(["accessToken", "refreshToken", "clientSecret"])
+          )
+        )
+        && (
+          collectionId != "calendarSyncRecords"
+          || (
+            request.resource.data.provider == "google"
+            && request.resource.data.direction == "planner-to-google"
+            && request.resource.data.scheduleBlockId is string
+            && request.resource.data.providerEventId is string
+            && !request.resource.data.keys().hasAny(["accessToken", "refreshToken", "clientSecret"])
+          )
+        )
+        && (
+          collectionId != "assistantMessages"
+          || (
+            request.resource.data.role in ["user", "assistant"]
+            && request.resource.data.text is string
+            && request.resource.data.createdAt is timestamp
+          )
+        )
+        && (
+          collectionId != "settings"
+          || document != "aiAssistant"
+          || (
+            request.resource.data.isEnabled is bool
+            && request.resource.data.confirmationRequiredForAllChanges == true
+            && request.resource.data.defaultResponseDetail in ["concise", "standard", "detailed"]
+          )
+        )
+        && (
+          collectionId != "assistantActionAudits"
+          || (
+            request.resource.data.status in ["approved", "rejected", "applied", "failed", "expired"]
+            && request.resource.data.actionType in ["create-task", "update-task", "create-session", "create-schedule-preview", "create-reminder"]
+            && request.resource.data.summary is string
+          )
+        )
+        && (
+          collectionId != "goals"
+          || (
+            request.resource.data.title is string
+            && request.resource.data.status in ["not-started", "active", "paused", "completed", "archived"]
+            && request.resource.data.progressMode in ["project-completion", "milestone-completion", "manual"]
+          )
+        )
+        && (
+          collectionId != "projects"
+          || (
+            request.resource.data.title is string
+            && request.resource.data.status in ["planning", "active", "paused", "completed", "archived"]
+            && request.resource.data.priority in ["low", "medium", "high", "critical"]
+            && request.resource.data.progressMode in ["task-completion", "milestone-completion", "effort-weighted", "manual"]
+            && (!request.resource.data.keys().hasAny(["goalId"]) || exists(/databases/$(database)/documents/users/$(userId)/goals/$(request.resource.data.goalId)))
+          )
+        )
+        && (
+          collectionId != "milestones"
+          || (
+            request.resource.data.title is string
+            && request.resource.data.projectId is string
+            && request.resource.data.status in ["not-started", "in-progress", "completed", "skipped", "archived"]
+            && exists(/databases/$(database)/documents/users/$(userId)/projects/$(request.resource.data.projectId))
+          )
+        )
+        && (
+          collectionId != "taskDependencies"
+          || (
+            request.resource.data.projectId is string
+            && request.resource.data.predecessorTaskId is string
+            && request.resource.data.successorTaskId is string
+            && request.resource.data.predecessorTaskId != request.resource.data.successorTaskId
+            && request.resource.data.type == "finish-to-start"
+            && exists(/databases/$(database)/documents/users/$(userId)/projects/$(request.resource.data.projectId))
+          )
+        )
+        && (
+          collectionId != "tasks"
+          || (
+            (!request.resource.data.keys().hasAny(["projectId"]) || exists(/databases/$(database)/documents/users/$(userId)/projects/$(request.resource.data.projectId)))
+            && (!request.resource.data.keys().hasAny(["milestoneId"]) || (
+              exists(/databases/$(database)/documents/users/$(userId)/milestones/$(request.resource.data.milestoneId))
+              && get(/databases/$(database)/documents/users/$(userId)/milestones/$(request.resource.data.milestoneId)).data.projectId == request.resource.data.projectId
+            ))
+            && (!request.resource.data.keys().hasAny(["recurrenceDefinitionId"]) || exists(/databases/$(database)/documents/users/$(userId)/recurrenceDefinitions/$(request.resource.data.recurrenceDefinitionId)))
+          )
+        )
+        && (
+          collectionId != "recurrenceDefinitions"
+          || (
+            request.resource.data.title is string
+            && request.resource.data.type in ["task", "routine"]
+            && request.resource.data.status in ["active", "paused", "completed", "archived"]
+            && request.resource.data.startDate is string
+            && request.resource.data.timezone is string
+            && request.resource.data.schemaVersion == 1
+          )
+        )
+        && (
+          collectionId != "recurrenceOccurrences"
+          || (
+            request.resource.data.recurrenceDefinitionId is string
+            && request.resource.data.occurrenceKey is string
+            && request.resource.data.occurrenceDate is string
+            && request.resource.data.status in ["pending", "generated", "completed", "skipped", "cancelled", "superseded"]
+            && exists(/databases/$(database)/documents/users/$(userId)/recurrenceDefinitions/$(request.resource.data.recurrenceDefinitionId))
+          )
+        )
+        && (
+          collectionId != "recurrenceExceptions"
+          || (
+            request.resource.data.seriesId is string
+            && request.resource.data.occurrenceKey is string
+            && request.resource.data.occurrenceDate is string
+            && request.resource.data.type in ["deleted", "suppressed", "moved-to-series", "detached"]
+            && exists(/databases/$(database)/documents/users/$(userId)/recurrenceDefinitions/$(request.resource.data.seriesId))
+          )
+        )
+        && (
+          collectionId != "routineTemplates"
+          || (
+            request.resource.data.name is string
+            && request.resource.data.taskDefaults is map
+            && request.resource.data.taskDefaults.title is string
+            && request.resource.data.schemaVersion == 1
+          )
+        )
+        && (
+          !collectionId.matches("^(syncOperations|entityTombstones|syncConflicts)$")
+          || (
+            request.resource.data.userId == userId
+            && request.resource.data.entityVersion is int
+            && request.resource.data.entityVersion >= 1
+            && request.resource.data.schemaVersion is int
+            && request.resource.data.schemaVersion == 1
+          )
+        )
+        && (
+          collectionId != "entityTombstones"
+          || (
+            request.resource.data.entityType is string
+            && request.resource.data.entityId is string
+            && request.resource.data.operationId is string
+            && request.resource.data.deletedAt is timestamp
+          )
+        )
+        && (
+          collectionId != "syncConflicts"
+          || (
+            request.resource.data.entityType is string
+            && request.resource.data.entityId is string
+            && request.resource.data.status in ["unresolved", "resolved-local", "resolved-remote", "resolved-merged", "dismissed", "error"]
+          )
+        );
     }
   }
 }

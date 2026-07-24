@@ -12,7 +12,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     const styles =
       variant === "outline"
         ? "bg-white/70 text-gray-800 border-gray-300 hover:bg-gray-100"
-        : "bg-gray-900 text-white border-gray-900 hover:bg-gray-800";
+        : "bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 border-pink-200 shadow hover:opacity-90";
     return (
       <button ref={ref} className={`${base} ${styles} ${className}`} {...props} />
     );

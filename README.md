@@ -11,6 +11,9 @@
 - Offline local caching
 - Legacy data migration
 - JSON backup and recovery
+- Task effort estimates and manual actual-time entry
+- Splittable-task session-size preferences
+- Manual and deterministic generated work sessions
 - Responsive planner interface
 
 ## Architecture
@@ -35,7 +38,11 @@ To enable Google sign-in and per-user Firestore synchronization:
 3. Copy `.env.example` to `.env.local` and fill in the public Firebase web-app values.
 4. Deploy `firestore.rules` with the Firebase CLI before using synchronization in production.
 
-Tasks are stored at `users/{userId}/tasks/{taskId}` and preferences at
+Tasks are stored at `users/{userId}/tasks/{taskId}`, availability at
+`users/{userId}/availability/{availabilityId}`, date overrides at
+`users/{userId}/availabilityOverrides/{overrideId}`, reusable templates at
+`users/{userId}/availabilityTemplates/{templateId}`, work sessions at
+`users/{userId}/taskSessions/{sessionId}`, and preferences at
 `users/{userId}/settings/preferences`. Do not add Firebase Admin SDK service-account credentials to
 frontend environment files.
 

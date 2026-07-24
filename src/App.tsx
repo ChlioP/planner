@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, Dispatch, JSX, KeyboardEvent, ReactNode, SetStateAction } from "react";
 
 import {
@@ -50,13 +50,137 @@ import {
 } from "@/lib/firebase";
 import {
   getUserPreferences,
+  loadUserAvailability,
+  loadUserAvailabilityTemplates,
+  loadUserTaskSessions,
+  loadUserScheduleBlocks,
   loadUserTasks,
+  loadUserTimeLogs,
+  loadUserNotifications,
+  loadUserReminders,
+  loadUserNotificationSettings,
+  loadUserCalendarData,
+  loadUserAssistantData,
+  loadUserProjectPlanning,
+  loadUserRecurrenceData,
+  mergeAvailabilityData,
+  mergeAvailabilityTemplateData,
+  mergeOverrideCopies,
   mergeTaskCopies,
+  mergeTaskSessionData,
+  mergeTimeLogData,
+  mergeScheduleBlockData,
   migrateLocalData,
   syncUserData,
+  syncUserAvailability,
+  syncUserAvailabilityTemplates,
+  syncUserTaskSessions,
+  syncUserTimeLogs,
+  syncUserScheduleBlocks,
+  syncUserNotifications,
+  syncUserReminders,
+  syncUserNotificationSettings,
+  syncUserCalendarData,
+  syncUserAssistantData,
+  syncUserProjectPlanning,
+  syncUserRecurrenceData,
+  mergeNotificationData,
+  mergeReminderData,
+  mergeCalendarSyncRecordData,
+  mergeAssistantMessageData,
+  mergeAssistantAuditData,
+  mergeGoalData,
+  mergeProjectData,
+  mergeMilestoneData,
+  mergeDependencyData,
+  mergeRecurrenceDefinitionData,
+  mergeRecurrenceOccurrenceData,
+  mergeRecurrenceExceptionData,
+  mergeRoutineTemplateData,
   type PlannerPreferences,
 } from "@/lib/firestoreSync";
 import { createPlannerBackup, mergeBackupTasks, parsePlannerBackup } from "@/lib/plannerBackup";
+import { AvailabilityPage } from "@/components/AvailabilityPage";
+import { PlanningEffortPage } from "@/components/PlanningEffortPage";
+import { TaskEffortEditor } from "@/components/TaskEffortEditor";
+import { mergeAvailabilityCopies, migrateAvailabilityBlocks, migrateAvailabilityOverrides, type AvailabilityBlock, type AvailabilityOverride } from "@/lib/availability";
+import { mergeTemplateCopies, migrateAvailabilityTemplates, type AvailabilityTemplate } from "@/lib/availabilityTemplates";
+import { displayedRemainingMinutes, estimateState, formatEffortMinutes } from "@/lib/taskEffort";
+import { mergeSessionCopies, migrateTaskSessions, parentEstimateWarnings, sessionTotals, sessionsForParent, type TaskSession } from "@/lib/taskSessions";
+import { mergeScheduleBlockCopies, migrateScheduleBlocks, type ScheduleBlock } from "@/lib/scheduleBlocks";
+import { completeTimer, createTimerLog, elapsedSeconds, mergeTimeLogCopies, migrateTimeLogs, pauseTimer, runningTimeLogs, taskHasActiveTimer, type TimeLog, type TimerStartInput } from "@/lib/timeLogs";
+import { FocusTimerPanel } from "@/components/FocusTimerPanel";
+import { AnalyticsPage } from "@/components/AnalyticsPage";
+import { NotificationCenter } from "@/components/NotificationCenter";
+import { CalendarIntegrationPage, ExternalCalendarSummary } from "@/components/CalendarIntegrationPage";
+import { PlanningAssistantPage } from "@/components/PlanningAssistantPage";
+import { ProjectsPage } from "@/components/ProjectsPage";
+import { RecurrencesPage } from "@/components/RecurrencesPage";
+import { SyncReliabilityPage, SyncStatusBadge } from "@/components/SyncReliabilityPage";
+import { useOfflineReliability, type OfflineCollection } from "@/lib/useOfflineReliability";
+import {
+  cleanupNotificationRetention,
+  DEFAULT_NOTIFICATION_SETTINGS,
+  evaluateNotifications,
+  mergeNotificationCopies,
+  mergeReminderCopies,
+  migrateNotificationSettings,
+  migratePlannerNotifications,
+  migrateReminders,
+  type NotificationSettings,
+  type PlannerNotification,
+  type Reminder,
+} from "@/lib/notifications";
+import {
+  DEFAULT_CALENDAR_CONNECTION,
+  DEFAULT_CALENDAR_SYNC_SETTINGS,
+  externalBusyAsAvailability,
+  mergeSyncRecords,
+  migrateCalendarConnection,
+  migrateCalendarSettings,
+  migrateExternalEvents,
+  migrateSyncRecords,
+  type CalendarConnection,
+  type CalendarSyncRecord,
+  type CalendarSyncSettings,
+  type ExternalCalendar,
+  type ExternalCalendarEvent,
+} from "@/lib/calendarIntegration";
+import {
+  DEFAULT_AI_SETTINGS,
+  migrateAssistantAudits,
+  migrateAssistantMessages,
+  migrateAISettings,
+  type AIAssistantActionAudit,
+  type AIAssistantSettings,
+  type AssistantConversationMessage,
+} from "@/lib/planningAssistant";
+import {
+  migrateDependencies,
+  migrateGoals,
+  migrateMilestones,
+  migrateProjects,
+  type Goal,
+  type Milestone,
+  type Project,
+  type TaskDependency,
+} from "@/lib/projectPlanning";
+import {
+  catchUpStart,
+  generateOccurrences,
+  materializeOccurrences,
+  migrateRecurrenceDefinitions,
+  migrateRecurrenceOccurrences,
+  migrateRecurrenceExceptions,
+  migrateRoutineTemplates,
+  nextGenerationEnd,
+  reconcileOccurrenceWithTask,
+  todayInTimezone,
+  type RecurrenceDefinition,
+  type RecurrenceOccurrence,
+  type RecurrenceException,
+  type RoutineTemplate,
+} from "@/lib/recurrence";
 import bun4 from "../bun4.jpg";
 import bun5 from "../bun5.jpg";
 import bun6 from "../bun6.jpg";
@@ -107,7 +231,7 @@ interface GoogleTokenClient {
   requestAccessToken(options: { prompt?: string }): void;
 }
 
-type View = "monthly" | "weekly" | "daily" | "google" | "checklist" | "archive" | "history";
+type View = "monthly" | "weekly" | "daily" | "planning" | "availability" | "projects" | "routines" | "insights" | "assistant" | "notifications" | "google" | "sync" | "checklist" | "archive" | "history";
 
 const sampleTasks: Task[] = migrateTasks([
   { id: 1, title: "Học Tiếng Trung HSK3", date: "2025-08-13", time: "09:00", status: "completed", priority: "high", category: "Học ngoại ngữ" },
@@ -127,6 +251,31 @@ const CHECKLIST_STORAGE_KEY = "planner_checklist_by_day_v1";
 const PROJECTS_STORAGE_KEY = "planner_projects_v1";
 const MUSIC_STORAGE_KEY = "planner_music_query_v1";
 const CHECKLIST_NOTE_STORAGE_KEY = "planner_checklist_note_v1";
+const AVAILABILITY_STORAGE_KEY = "planner_availability_v1";
+const AVAILABILITY_OVERRIDES_STORAGE_KEY = "planner_availability_overrides_v1";
+const AVAILABILITY_TEMPLATES_STORAGE_KEY = "planner_availability_templates_v1";
+const TASK_SESSIONS_STORAGE_KEY = "planner_task_sessions_v1";
+const SCHEDULE_BLOCKS_STORAGE_KEY = "planner_schedule_blocks_v1";
+const TIME_LOGS_STORAGE_KEY = "planner_time_logs_v1";
+const NOTIFICATIONS_STORAGE_KEY = "planner_notifications_v1";
+const REMINDERS_STORAGE_KEY = "planner_reminders_v1";
+const NOTIFICATION_SETTINGS_STORAGE_KEY = "planner_notification_settings_v1";
+const CALENDAR_CONNECTION_STORAGE_KEY = "planner_calendar_connection_google_v1";
+const CALENDAR_SETTINGS_STORAGE_KEY = "planner_calendar_settings_google_v1";
+const CALENDAR_SOURCES_STORAGE_KEY = "planner_calendar_sources_google_v1";
+const EXTERNAL_EVENTS_STORAGE_KEY = "planner_external_events_google_v1";
+const CALENDAR_SYNC_RECORDS_STORAGE_KEY = "planner_calendar_sync_records_v1";
+const AI_SETTINGS_STORAGE_KEY = "planner_ai_assistant_settings_v1";
+const AI_CONVERSATIONS_STORAGE_KEY = "planner_ai_conversation_v1";
+const AI_AUDITS_STORAGE_KEY = "planner_ai_action_audits_v1";
+const GOALS_STORAGE_KEY = "planner_goals_v1";
+const PLANNING_PROJECTS_STORAGE_KEY = "planner_structured_projects_v1";
+const MILESTONES_STORAGE_KEY = "planner_milestones_v1";
+const DEPENDENCIES_STORAGE_KEY = "planner_task_dependencies_v1";
+const RECURRENCE_DEFINITIONS_STORAGE_KEY = "planner_recurrence_definitions_v1";
+const RECURRENCE_OCCURRENCES_STORAGE_KEY = "planner_recurrence_occurrences_v1";
+const RECURRENCE_EXCEPTIONS_STORAGE_KEY = "planner_recurrence_exceptions_v1";
+const ROUTINE_TEMPLATES_STORAGE_KEY = "planner_routine_templates_v1";
 const DEFAULT_MUSIC_QUERY = "lofi hip hop beats to study and relax to";
 const DEFAULT_CHECKLIST: ChecklistItem[] = [
   { id: "1", text: "Chép kinh", done: false },
@@ -235,6 +384,7 @@ function percentCompleted(tasks: Task[]) {
 }
 
 function priorityPill(priority: Task["priority"]) {
+  if (priority === "critical") return "bg-red-200 text-red-900";
   if (priority === "high") return "bg-pink-200 text-pink-900";
   if (priority === "medium") return "bg-yellow-200 text-yellow-900";
   return "bg-emerald-200 text-emerald-900";
@@ -297,6 +447,7 @@ function TaskTable({ tasks, onToggle }: { tasks: Task[]; onToggle: (id: string) 
                   <div className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityPill(t.priority)}`}>
                     {t.priority}
                   </div>
+                  <div className="mt-1 text-[10px] text-slate-500">Estimate: {formatEffortMinutes(t.estimatedMinutes)}</div>
                 </td>
                 <td className="p-2 align-top text-slate-600">{t.category}</td>
                 <td className="p-2 pr-3 align-top text-right text-slate-600">{t.time}</td>
@@ -1034,7 +1185,8 @@ function MonthlyPlanner({ tasks }: { tasks: Task[] }) {
 
 
 // Weekly view
-function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+function WeeklyPlanner({ tasks, setTasks, sessions, timeLogs }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>>; sessions: TaskSession[]; timeLogs: TimeLog[] }) {
+  const [editingEffortId, setEditingEffortId] = useState<string | null>(null);
   const start = startOfWeek(new Date(), true);
   const weeks = useMemo(
     () =>
@@ -1114,13 +1266,14 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
                         <th className="py-2 px-2 text-left">End</th>
                         <th className="py-2 px-2 text-left">Note</th>
                         <th className="py-2 px-2 text-left">Priority</th>
+                        <th className="py-2 px-2 text-left">Effort</th>
                         <th className="py-2 px-2 text-center">Archive</th>
                       </tr>
                     </thead>
                     <tbody>
                       {weekTasks.map((item) => (
+                        <Fragment key={item.id}>
                         <tr
-                          key={item.id}
                           className="border-b border-slate-100 hover:bg-pink-50/30 transition-colors"
                         >
                           <td className="py-2 px-2">
@@ -1189,29 +1342,46 @@ function WeeklyPlanner({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<
                                 updateWeekItem(item.id, "priority", e.target.value as Task["priority"])
                               }
                             >
+                              <option value="critical">critical</option>
                               <option value="high">high</option>
                               <option value="medium">medium</option>
                               <option value="low">low</option>
                             </select>
                           </td>
+                          <td className="py-2 px-2">
+                            <div className="text-[11px] text-slate-600">{formatEffortMinutes(item.estimatedMinutes)}</div>
+                            <Button variant="outline" className="mt-1 h-7 px-2 text-[10px]" onClick={() => setEditingEffortId(editingEffortId === item.id ? null : item.id)}>Edit effort</Button>
+                          </td>
                           <td className="py-2 px-2 text-center">
                             <Button
                               variant="outline"
                               className="h-8 rounded-full px-3 text-xs text-slate-600 hover:text-red-600"
-                              onClick={() =>
-                                setTasks((prev) =>
-                                  prev.map((t) => (t.id === item.id ? archiveTask(t) : t)),
-                                )
-                              }
+                              onClick={() => {
+                                if (taskHasActiveTimer(timeLogs, item.id)) { window.alert("Stop and save or discard this task’s active timer before archiving it."); return; }
+                                setTasks((prev) => prev.map((t) => (t.id === item.id ? archiveTask(t) : t)));
+                              }}
                             >
                               Archive
                             </Button>
                           </td>
                         </tr>
+                        {editingEffortId === item.id ? <tr><td colSpan={9} className="p-3"><TaskEffortEditor task={item} compact onSave={(patch, complete) => {
+                          const linked = sessionsForParent(sessions, item.id);
+                          const warnings = parentEstimateWarnings(patch.estimatedMinutes, linked);
+                          if (item.isSplittable && !patch.isSplittable && linked.length) warnings.push("Existing work sessions will be preserved when splitting is turned off.");
+                          if (warnings.length && !window.confirm(`${warnings.join("\n")}\n\nSave this effort change?`)) return;
+                          setTasks((current) => current.map((task) => {
+                            if (task.id !== item.id) return task;
+                            const updated = { ...task, ...patch, updatedAt: new Date().toISOString() };
+                            return complete ? completeTask(updated) : updated;
+                          }));
+                          setEditingEffortId(null);
+                        }} onCancel={() => setEditingEffortId(null)}/></td></tr> : null}
+                        </Fragment>
                       ))}
                       {weekTasks.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="py-3 text-center text-slate-500">
+                          <td colSpan={9} className="py-3 text-center text-slate-500">
                             No rows yet. Click “Add row” to plan this week.
                           </td>
                         </tr>
@@ -1892,6 +2062,7 @@ function GoogleCalendarView({
                               <div className="text-xs text-muted-foreground">
                                 {t.category} • {t.time}
                               </div>
+                              <div className="text-xs text-muted-foreground">Estimate: {formatEffortMinutes(t.estimatedMinutes)}</div>
                             </div>
                           </div>
 
@@ -1900,6 +2071,7 @@ function GoogleCalendarView({
                             value={t.priority}
                             onChange={(e) => updateTaskPriority(t.id, e.target.value as Task["priority"])}
                           >
+                            <option value="critical">critical</option>
                             <option value="high">high</option>
                             <option value="medium">medium</option>
                             <option value="low">low</option>
@@ -1918,6 +2090,10 @@ function GoogleCalendarView({
   );
 }
 
+// Kept temporarily for rollback compatibility with the pre-Phase-12 local view.
+// The navigation now renders CalendarIntegrationPage instead.
+void GoogleCalendarView;
+
 function formatTimestamp(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
@@ -1930,7 +2106,7 @@ function lifecycleDate(task: Task) {
     : task.completedAt ?? `${task.date}T${task.time}`;
 }
 
-function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () => void }) {
+function TaskDetailsDialog({ task, onClose, sessions = [] }: { task: Task | null; onClose: () => void; sessions?: TaskSession[] }) {
   useEffect(() => {
     if (!task) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -1941,12 +2117,19 @@ function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () =
   }, [onClose, task]);
 
   if (!task) return null;
+  const linkedSessions = sessionsForParent(sessions, task.id);
+  const linkedTotals = sessionTotals(task, linkedSessions);
   const details = [
     ["Status", task.status],
     ["Scheduled date", task.date],
     ["Start time", task.time],
     ["End time", task.endTime ?? "—"],
     ["Duration", task.durationMins ? `${task.durationMins} minutes` : "—"],
+    ["Estimate", formatEffortMinutes(task.estimatedMinutes)],
+    ["Actual", task.actualMinutes === undefined ? "Not entered" : formatEffortMinutes(task.actualMinutes)],
+    ["Remaining", displayedRemainingMinutes(task) === undefined ? "Not calculable" : formatEffortMinutes(displayedRemainingMinutes(task))],
+    ["Estimate state", estimateState(task)],
+    ["Task style", task.isSplittable ? `Splittable · ${formatEffortMinutes(task.minimumSessionMinutes)} minimum · ${formatEffortMinutes(task.maximumSessionMinutes)} maximum` : "Single session"],
     ["Category", task.category],
     ["Priority", task.priority],
     ["Tags", task.tags?.length ? task.tags.join(", ") : "—"],
@@ -1971,6 +2154,7 @@ function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () =
           <div>
             <div className="text-[11px] uppercase tracking-wide text-slate-500">Task details</div>
             <h2 id="task-details-title" className="text-lg font-semibold text-slate-800">{task.title}</h2>
+            {task.recurrence ? <p className="mt-1 text-xs font-medium text-pink-700">Recurring occurrence · {task.recurrence.occurrenceDate} · {task.recurrence.status}</p> : null}
           </div>
           <Button autoFocus variant="outline" className="rounded-full bg-white/80" onClick={onClose}>Close</Button>
         </div>
@@ -1982,6 +2166,10 @@ function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () =
             </div>
           ))}
         </dl>
+        <section className="mt-4" aria-labelledby="task-details-sessions">
+          <h3 id="task-details-sessions" className="text-sm font-semibold text-slate-700">Work sessions</h3>
+          {linkedSessions.length === 0 ? <p className="mt-2 text-sm text-slate-500">No work sessions.</p> : <><p className="mt-1 text-xs text-slate-500">Assigned {formatEffortMinutes(linkedTotals.assignedMinutes)} · Completed {formatEffortMinutes(linkedTotals.completedMinutes)} · Progress {linkedTotals.progressPercent}%</p><ol className="mt-2 space-y-2">{linkedSessions.map((session) => <li key={session.id} className="rounded-xl bg-pink-50/40 px-3 py-2 text-sm ring-1 ring-pink-100"><div className="font-medium text-slate-700">{session.title}</div><div className="text-xs text-slate-500">{formatEffortMinutes(session.estimatedMinutes)} · {session.status} · {session.isGenerated ? "Generated" : "Manual"}</div></li>)}</ol></>}
+        </section>
       </div>
     </div>
   );
@@ -1989,7 +2177,7 @@ function TaskDetailsDialog({ task, onClose }: { task: Task | null; onClose: () =
 
 type ArchiveSort = "newest" | "oldest" | "recently-completed" | "recently-archived";
 
-function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+function ArchiveView({ tasks, setTasks, sessions, setSessions, timeLogs, setTimeLogs }: { tasks: Task[]; setTasks: Dispatch<SetStateAction<Task[]>>; sessions: TaskSession[]; setSessions: Dispatch<SetStateAction<TaskSession[]>>; timeLogs: TimeLog[]; setTimeLogs: Dispatch<SetStateAction<TimeLog[]>> }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [priority, setPriority] = useState("");
@@ -2033,11 +2221,16 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
   }, [allArchivedTasks, archiveDate, category, completionDate, priority, query, scheduledDate, sort]);
 
   const permanentlyDelete = (task: Task) => {
+    if (taskHasActiveTimer(timeLogs, task.id)) { window.alert("Stop and save or discard this task’s active timer before deleting it."); return; }
+    const linkedCount = sessions.filter((session) => session.parentTaskId === task.id).length;
+    const logCount = timeLogs.filter((log) => log.taskId === task.id).length;
     const confirmed = window.confirm(
-      `Permanently delete “${task.title}”? This cannot be undone.`,
+      `Permanently delete “${task.title}”? ${linkedCount ? `${linkedCount} linked work session(s) will also be deleted. ` : ""}${logCount ? `${logCount} linked time log(s) will also be deleted. ` : ""}This cannot be undone.`,
     );
     if (!confirmed) return;
     setTasks((prev) => permanentlyDeleteTask(prev, task.id));
+    setSessions((current) => current.filter((session) => session.parentTaskId !== task.id));
+    setTimeLogs((current) => current.filter((log) => log.taskId !== task.id));
   };
 
   return (
@@ -2056,7 +2249,7 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
               </select>
               <select aria-label="Filter archived tasks by priority" value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
                 <option value="">All priorities</option>
-                <option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
+                <option value="critical">critical</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
               </select>
               <label className="text-[11px] text-slate-500">Completed<Input type="date" value={completionDate} onChange={(event) => setCompletionDate(event.target.value)} className="mt-1 rounded-xl bg-white/80" /></label>
               <label className="text-[11px] text-slate-500">Archived<Input type="date" value={archiveDate} onChange={(event) => setArchiveDate(event.target.value)} className="mt-1 rounded-xl bg-white/80" /></label>
@@ -2076,6 +2269,7 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
                   <div className="text-xs text-slate-500">
                     {task.date} • {task.time} • {task.category}
                   </div>
+                  <div className="text-xs text-slate-500">Estimate: {formatEffortMinutes(task.estimatedMinutes)}{task.actualMinutes === undefined ? "" : ` • Actual: ${formatEffortMinutes(task.actualMinutes)}`}</div>
                 </button>
                 <div className="flex gap-2">
                   <Button
@@ -2100,12 +2294,12 @@ function ArchiveView({ tasks, setTasks }: { tasks: Task[]; setTasks: Dispatch<Se
           </div>
         )}
       </SoftCard>
-      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} />
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} sessions={sessions} />
     </div>
   );
 }
 
-function HistoryView({ tasks }: { tasks: Task[] }) {
+function HistoryView({ tasks, sessions }: { tasks: Task[]; sessions: TaskSession[] }) {
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -2158,6 +2352,7 @@ function HistoryView({ tasks }: { tasks: Task[] }) {
                     <span className="text-sm font-medium text-slate-700">{task.title}</span>
                     <span className="rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-pink-100">{task.status}</span>
                   </div>
+                  <div className="text-xs text-slate-500">Estimate: {formatEffortMinutes(task.estimatedMinutes)}{task.actualMinutes === undefined ? "" : ` • Actual: ${formatEffortMinutes(task.actualMinutes)}`}</div>
                   <span className="text-xs text-slate-500">{task.date} • {task.category} • {task.priority}</span>
                   {task.note ? <span className="line-clamp-2 text-xs text-slate-600">{task.note}</span> : null}
                 </button>
@@ -2166,7 +2361,7 @@ function HistoryView({ tasks }: { tasks: Task[] }) {
           )}
         </section>
       </SoftCard>
-      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} />
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} sessions={sessions} />
     </div>
   );
 }
@@ -2183,8 +2378,47 @@ export default function PlannerAppV2() {
   const [checklistNoteHydrated, setChecklistNoteHydrated] = useState(false);
   const [musicQuery, setMusicQuery] = useState(DEFAULT_MUSIC_QUERY);
   const [musicHydrated, setMusicHydrated] = useState(false);
-  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
-  const [googleTokenClient, setGoogleTokenClient] = useState<GoogleTokenClient | null>(null);
+  const [availability, setAvailability] = useState<AvailabilityBlock[]>([]);
+  const [availabilityHydrated, setAvailabilityHydrated] = useState(false);
+  const [availabilityOverrides, setAvailabilityOverrides] = useState<AvailabilityOverride[]>([]);
+  const [availabilityOverridesHydrated, setAvailabilityOverridesHydrated] = useState(false);
+  const [availabilityTemplates, setAvailabilityTemplates] = useState<AvailabilityTemplate[]>([]);
+  const [availabilityTemplatesHydrated, setAvailabilityTemplatesHydrated] = useState(false);
+  const [taskSessions, setTaskSessions] = useState<TaskSession[]>([]);
+  const [taskSessionsHydrated, setTaskSessionsHydrated] = useState(false);
+  const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>([]);
+  const [scheduleBlocksHydrated, setScheduleBlocksHydrated] = useState(false);
+  const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
+  const [timeLogsHydrated, setTimeLogsHydrated] = useState(false);
+  const [notifications, setNotifications] = useState<PlannerNotification[]>([]);
+  const [notificationsHydrated, setNotificationsHydrated] = useState(false);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [remindersHydrated, setRemindersHydrated] = useState(false);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [notificationSettingsHydrated, setNotificationSettingsHydrated] = useState(false);
+  const [notificationMinute, setNotificationMinute] = useState(() => Math.floor(Date.now() / 60_000));
+  const [calendarConnection, setCalendarConnection] = useState<CalendarConnection>(DEFAULT_CALENDAR_CONNECTION);
+  const [calendarSettings, setCalendarSettings] = useState<CalendarSyncSettings>(DEFAULT_CALENDAR_SYNC_SETTINGS);
+  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>([]);
+  const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [calendarSyncRecords, setCalendarSyncRecords] = useState<CalendarSyncRecord[]>([]);
+  const [calendarHydrated, setCalendarHydrated] = useState(false);
+  const [aiSettings, setAISettings] = useState<AIAssistantSettings>(DEFAULT_AI_SETTINGS);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantConversationMessage[]>([]);
+  const [assistantAudits, setAssistantAudits] = useState<AIAssistantActionAudit[]>([]);
+  const [assistantHydrated, setAssistantHydrated] = useState(false);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [planningProjects, setPlanningProjects] = useState<Project[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [taskDependencies, setTaskDependencies] = useState<TaskDependency[]>([]);
+  const [projectPlanningHydrated, setProjectPlanningHydrated] = useState(false);
+  const [recurrenceDefinitions, setRecurrenceDefinitions] = useState<RecurrenceDefinition[]>([]);
+  const [recurrenceOccurrences, setRecurrenceOccurrences] = useState<RecurrenceOccurrence[]>([]);
+  const [recurrenceExceptions, setRecurrenceExceptions] = useState<RecurrenceException[]>([]);
+  const [routineTemplates, setRoutineTemplates] = useState<RoutineTemplate[]>([]);
+  const [recurrenceHydrated, setRecurrenceHydrated] = useState(false);
+  const [recurrenceGenerationRan, setRecurrenceGenerationRan] = useState(false);
+  const [timerRecovered, setTimerRecovered] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [syncInitialized, setSyncInitialized] = useState(false);
@@ -2294,6 +2528,242 @@ export default function PlannerAppV2() {
     writeLocalStorage(CHECKLIST_NOTE_STORAGE_KEY, checklistNote);
   }, [checklistNote, checklistNoteHydrated]);
 
+  useEffect(() => {
+    const raw = localStorage.getItem(AVAILABILITY_STORAGE_KEY);
+    if (raw) {
+      try { setAvailability(migrateAvailabilityBlocks(JSON.parse(raw))); }
+      catch (error) { console.error("Failed to parse saved availability; original storage was preserved", error); return; }
+    }
+    setAvailabilityHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!availabilityHydrated) return;
+    writeLocalStorage(AVAILABILITY_STORAGE_KEY, JSON.stringify(availability));
+  }, [availability, availabilityHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(AVAILABILITY_OVERRIDES_STORAGE_KEY);
+    if (raw) {
+      try { setAvailabilityOverrides(migrateAvailabilityOverrides(JSON.parse(raw))); }
+      catch (error) { console.error("Failed to parse saved availability overrides; original storage was preserved", error); return; }
+    }
+    setAvailabilityOverridesHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!availabilityOverridesHydrated) return;
+    writeLocalStorage(AVAILABILITY_OVERRIDES_STORAGE_KEY, JSON.stringify(availabilityOverrides));
+  }, [availabilityOverrides, availabilityOverridesHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(AVAILABILITY_TEMPLATES_STORAGE_KEY);
+    if (raw) {
+      try { setAvailabilityTemplates(migrateAvailabilityTemplates(JSON.parse(raw))); }
+      catch (error) { console.error("Failed to parse saved availability templates; original storage was preserved", error); return; }
+    }
+    setAvailabilityTemplatesHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!availabilityTemplatesHydrated) return;
+    writeLocalStorage(AVAILABILITY_TEMPLATES_STORAGE_KEY, JSON.stringify(availabilityTemplates));
+  }, [availabilityTemplates, availabilityTemplatesHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(TASK_SESSIONS_STORAGE_KEY);
+    if (raw) {
+      try { setTaskSessions(migrateTaskSessions(JSON.parse(raw))); }
+      catch (error) { console.error("Failed to parse saved task sessions; original storage was preserved", error); return; }
+    }
+    setTaskSessionsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!taskSessionsHydrated) return;
+    writeLocalStorage(TASK_SESSIONS_STORAGE_KEY, JSON.stringify(taskSessions));
+  }, [taskSessions, taskSessionsHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(SCHEDULE_BLOCKS_STORAGE_KEY);
+    if (raw) {
+      try { setScheduleBlocks(migrateScheduleBlocks(JSON.parse(raw))); }
+      catch (error) { console.error("Failed to parse saved schedule blocks; original storage was preserved", error); return; }
+    }
+    setScheduleBlocksHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!scheduleBlocksHydrated) return;
+    writeLocalStorage(SCHEDULE_BLOCKS_STORAGE_KEY, JSON.stringify(scheduleBlocks));
+  }, [scheduleBlocks, scheduleBlocksHydrated]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(TIME_LOGS_STORAGE_KEY);
+    if (raw) {
+      try {
+        const loaded = migrateTimeLogs(JSON.parse(raw));
+        setTimeLogs(loaded);
+        setTimerRecovered(loaded.some((log) => log.status === "running" || log.status === "paused"));
+      } catch (error) { console.error("Failed to parse saved time logs; original storage was preserved", error); return; }
+    }
+    setTimeLogsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!timeLogsHydrated) return;
+    writeLocalStorage(TIME_LOGS_STORAGE_KEY, JSON.stringify(timeLogs));
+  }, [timeLogs, timeLogsHydrated]);
+
+  useEffect(() => {
+    const rawNotifications = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+    const rawReminders = localStorage.getItem(REMINDERS_STORAGE_KEY);
+    const rawSettings = localStorage.getItem(NOTIFICATION_SETTINGS_STORAGE_KEY);
+    try {
+      if (rawNotifications) setNotifications(cleanupNotificationRetention(migratePlannerNotifications(JSON.parse(rawNotifications))));
+      if (rawReminders) setReminders(migrateReminders(JSON.parse(rawReminders)));
+      if (rawSettings) setNotificationSettings(migrateNotificationSettings(JSON.parse(rawSettings)));
+    } catch (error) {
+      console.error("Failed to load notification data; original storage was preserved", error);
+    }
+    setNotificationsHydrated(true);
+    setRemindersHydrated(true);
+    setNotificationSettingsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (notificationsHydrated) writeLocalStorage(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
+  }, [notifications, notificationsHydrated]);
+  useEffect(() => {
+    if (remindersHydrated) writeLocalStorage(REMINDERS_STORAGE_KEY, JSON.stringify(reminders));
+  }, [reminders, remindersHydrated]);
+  useEffect(() => {
+    if (notificationSettingsHydrated) writeLocalStorage(NOTIFICATION_SETTINGS_STORAGE_KEY, JSON.stringify(notificationSettings));
+  }, [notificationSettings, notificationSettingsHydrated]);
+
+  useEffect(() => {
+    try {
+      const connection = localStorage.getItem(CALENDAR_CONNECTION_STORAGE_KEY);
+      const settings = localStorage.getItem(CALENDAR_SETTINGS_STORAGE_KEY);
+      const sources = localStorage.getItem(CALENDAR_SOURCES_STORAGE_KEY);
+      const events = localStorage.getItem(EXTERNAL_EVENTS_STORAGE_KEY);
+      const records = localStorage.getItem(CALENDAR_SYNC_RECORDS_STORAGE_KEY);
+      if (connection) setCalendarConnection(migrateCalendarConnection(JSON.parse(connection)));
+      if (settings) setCalendarSettings(migrateCalendarSettings(JSON.parse(settings)));
+      if (sources) setExternalCalendars(JSON.parse(sources) as ExternalCalendar[]);
+      if (events) setExternalEvents(migrateExternalEvents(JSON.parse(events)));
+      if (records) setCalendarSyncRecords(migrateSyncRecords(JSON.parse(records)));
+    } catch (error) { console.error("Failed to load calendar metadata; original storage was preserved", error); }
+    setCalendarHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!calendarHydrated) return;
+    writeLocalStorage(CALENDAR_CONNECTION_STORAGE_KEY, JSON.stringify(calendarConnection));
+    writeLocalStorage(CALENDAR_SETTINGS_STORAGE_KEY, JSON.stringify(calendarSettings));
+    writeLocalStorage(CALENDAR_SOURCES_STORAGE_KEY, JSON.stringify(externalCalendars));
+    writeLocalStorage(EXTERNAL_EVENTS_STORAGE_KEY, JSON.stringify(externalEvents));
+    writeLocalStorage(CALENDAR_SYNC_RECORDS_STORAGE_KEY, JSON.stringify(calendarSyncRecords));
+  }, [calendarConnection, calendarHydrated, calendarSettings, calendarSyncRecords, externalCalendars, externalEvents]);
+  useEffect(() => {
+    try {
+      const settings = localStorage.getItem(AI_SETTINGS_STORAGE_KEY);
+      const messages = localStorage.getItem(AI_CONVERSATIONS_STORAGE_KEY);
+      const audits = localStorage.getItem(AI_AUDITS_STORAGE_KEY);
+      if (settings) setAISettings(migrateAISettings(JSON.parse(settings)));
+      if (messages) setAssistantMessages(migrateAssistantMessages(JSON.parse(messages)));
+      if (audits) setAssistantAudits(migrateAssistantAudits(JSON.parse(audits)));
+    } catch (error) { console.error("Failed to load AI assistant preferences; original storage was preserved", error); }
+    setAssistantHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!assistantHydrated) return;
+    writeLocalStorage(AI_SETTINGS_STORAGE_KEY, JSON.stringify(aiSettings));
+    writeLocalStorage(AI_CONVERSATIONS_STORAGE_KEY, JSON.stringify(aiSettings.conversationHistoryEnabled ? assistantMessages.slice(-aiSettings.maximumHistoryMessages) : []));
+    writeLocalStorage(AI_AUDITS_STORAGE_KEY, JSON.stringify(assistantAudits));
+  }, [aiSettings, assistantAudits, assistantHydrated, assistantMessages]);
+  useEffect(() => {
+    try {
+      const savedGoals = localStorage.getItem(GOALS_STORAGE_KEY);
+      const savedProjects = localStorage.getItem(PLANNING_PROJECTS_STORAGE_KEY);
+      const savedMilestones = localStorage.getItem(MILESTONES_STORAGE_KEY);
+      const savedDependencies = localStorage.getItem(DEPENDENCIES_STORAGE_KEY);
+      if (savedGoals) setGoals(migrateGoals(JSON.parse(savedGoals)));
+      if (savedProjects) setPlanningProjects(migrateProjects(JSON.parse(savedProjects)));
+      if (savedMilestones) setMilestones(migrateMilestones(JSON.parse(savedMilestones)));
+      if (savedDependencies) setTaskDependencies(migrateDependencies(JSON.parse(savedDependencies)));
+    } catch (error) { console.error("Failed to load projects and goals; ordinary planner data remains available", error); }
+    setProjectPlanningHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!projectPlanningHydrated) return;
+    writeLocalStorage(GOALS_STORAGE_KEY, JSON.stringify(goals));
+    writeLocalStorage(PLANNING_PROJECTS_STORAGE_KEY, JSON.stringify(planningProjects));
+    writeLocalStorage(MILESTONES_STORAGE_KEY, JSON.stringify(milestones));
+    writeLocalStorage(DEPENDENCIES_STORAGE_KEY, JSON.stringify(taskDependencies));
+  }, [goals, milestones, planningProjects, projectPlanningHydrated, taskDependencies]);
+  useEffect(() => {
+    try {
+      const definitions = localStorage.getItem(RECURRENCE_DEFINITIONS_STORAGE_KEY);
+      const occurrences = localStorage.getItem(RECURRENCE_OCCURRENCES_STORAGE_KEY);
+      const exceptions = localStorage.getItem(RECURRENCE_EXCEPTIONS_STORAGE_KEY);
+      const templates = localStorage.getItem(ROUTINE_TEMPLATES_STORAGE_KEY);
+      if (definitions) setRecurrenceDefinitions(migrateRecurrenceDefinitions(JSON.parse(definitions)));
+      if (occurrences) setRecurrenceOccurrences(migrateRecurrenceOccurrences(JSON.parse(occurrences)));
+      if (exceptions) setRecurrenceExceptions(migrateRecurrenceExceptions(JSON.parse(exceptions)));
+      if (templates) setRoutineTemplates(migrateRoutineTemplates(JSON.parse(templates)));
+    } catch (error) { console.error("Failed to load recurring work; ordinary tasks remain available", error); }
+    setRecurrenceHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!recurrenceHydrated) return;
+    writeLocalStorage(RECURRENCE_DEFINITIONS_STORAGE_KEY, JSON.stringify(recurrenceDefinitions));
+    writeLocalStorage(RECURRENCE_OCCURRENCES_STORAGE_KEY, JSON.stringify(recurrenceOccurrences));
+    writeLocalStorage(RECURRENCE_EXCEPTIONS_STORAGE_KEY, JSON.stringify(recurrenceExceptions));
+    writeLocalStorage(ROUTINE_TEMPLATES_STORAGE_KEY, JSON.stringify(routineTemplates));
+  }, [recurrenceDefinitions, recurrenceExceptions, recurrenceHydrated, recurrenceOccurrences, routineTemplates]);
+  useEffect(() => {
+    if (!recurrenceHydrated || !hydrated || recurrenceGenerationRan) return;
+    const now = new Date().toISOString();
+    let nextTasks = tasks, nextSessions = taskSessions, nextOccurrences = [...recurrenceOccurrences];
+    for (const definition of recurrenceDefinitions.filter((item) => item.status === "active" && item.generationSettings.generationMode === "app-open")) {
+      const today = todayInTimezone(definition.timezone, new Date());
+      const milestoneIsValid = !definition.taskTemplate.milestoneId || milestones.some((item) => item.id === definition.taskTemplate.milestoneId && item.projectId === definition.taskTemplate.projectId && item.status !== "archived");
+      const generationDefinition = milestoneIsValid ? definition : { ...definition, taskTemplate: { ...definition.taskTemplate, milestoneId: undefined } };
+      const exceptionKeys = recurrenceExceptions.filter((item) => item.seriesId === definition.id).map((item) => item.occurrenceKey);
+      const generated = generateOccurrences(generationDefinition, catchUpStart(today), nextGenerationEnd(generationDefinition, today), nextOccurrences.map((item) => item.occurrenceKey), now, exceptionKeys);
+      const materialized = materializeOccurrences(generationDefinition, generated.occurrences, nextTasks, now, nextSessions);
+      nextTasks = materialized.tasks;
+      nextSessions = materialized.sessions;
+      nextOccurrences = [...nextOccurrences, ...materialized.occurrences];
+    }
+    setTasks(nextTasks);
+    setTaskSessions(nextSessions);
+    setRecurrenceOccurrences(nextOccurrences);
+    setRecurrenceGenerationRan(true);
+  }, [hydrated, milestones, recurrenceDefinitions, recurrenceExceptions, recurrenceGenerationRan, recurrenceHydrated, recurrenceOccurrences, taskSessions, tasks]);
+  useEffect(() => {
+    if (!recurrenceHydrated) return;
+    const taskMap = new Map(tasks.map((task) => [task.id, task]));
+    const now = new Date().toISOString();
+    setRecurrenceOccurrences((items) => {
+      let changed = false;
+      const next = items.map((item) => {
+        const task = item.taskId ? taskMap.get(item.taskId) : undefined;
+        if (!task) return item;
+        const reconciled = reconcileOccurrenceWithTask(item, task, now);
+        if (reconciled.status !== item.status || reconciled.completedAt !== item.completedAt) changed = true;
+        return reconciled;
+      });
+      return changed ? next : items;
+    });
+  }, [recurrenceHydrated, tasks]);
+
+  useEffect(() => {
+    const updateMinute = () => setNotificationMinute(Math.floor(Date.now() / 60_000));
+    const interval = window.setInterval(updateMinute, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   useEffect(() => observeFirebaseUser((user) => {
     currentUserIdRef.current = user?.uid ?? null;
     setFirebaseUser(user);
@@ -2322,8 +2792,36 @@ export default function PlannerAppV2() {
     projects,
     checklistNote,
   }), [checklistByDate, checklistNote, musicQuery, projects]);
+  const plannerAvailability = useMemo(() => [
+    ...availability,
+    ...externalBusyAsAvailability(externalEvents, calendarSettings, calendarSyncRecords, calendarConnection.lastSuccessfulSyncAt ?? new Date().toISOString()),
+  ], [availability, calendarConnection.lastSuccessfulSyncAt, calendarSettings, calendarSyncRecords, externalEvents]);
 
-  const allLocalDataHydrated = hydrated && musicHydrated && checklistHydrated && projectsHydrated && checklistNoteHydrated;
+  const allLocalDataHydrated = hydrated && musicHydrated && checklistHydrated && projectsHydrated && checklistNoteHydrated && availabilityHydrated && availabilityOverridesHydrated && availabilityTemplatesHydrated && taskSessionsHydrated && scheduleBlocksHydrated && timeLogsHydrated && notificationsHydrated && remindersHydrated && notificationSettingsHydrated && calendarHydrated && assistantHydrated && projectPlanningHydrated && recurrenceHydrated;
+  const offlineCollections = useMemo<OfflineCollection[]>(() => [
+    { entityType: "task", records: tasks },
+    { entityType: "session", records: taskSessions },
+    { entityType: "availability", records: availability },
+    { entityType: "availability-override", records: availabilityOverrides },
+    { entityType: "availability-template", records: availabilityTemplates },
+    { entityType: "schedule-block", records: scheduleBlocks },
+    { entityType: "time-log", records: timeLogs },
+    { entityType: "reminder", records: reminders },
+    { entityType: "notification", records: notifications },
+    { entityType: "calendar-sync-record", records: calendarSyncRecords },
+    { entityType: "ai-conversation", records: assistantMessages },
+    { entityType: "ai-audit", records: assistantAudits },
+    { entityType: "goal", records: goals },
+    { entityType: "project", records: planningProjects },
+    { entityType: "milestone", records: milestones },
+    { entityType: "dependency", records: taskDependencies },
+    { entityType: "recurrence-series", records: recurrenceDefinitions },
+    { entityType: "recurrence-occurrence", records: recurrenceOccurrences },
+    { entityType: "recurrence-exception", records: recurrenceExceptions },
+    { entityType: "routine-template", records: routineTemplates },
+  ], [assistantAudits, assistantMessages, availability, availabilityOverrides, availabilityTemplates, calendarSyncRecords, goals, milestones, notifications, planningProjects, recurrenceDefinitions, recurrenceExceptions, recurrenceOccurrences, reminders, routineTemplates, scheduleBlocks, taskDependencies, taskSessions, tasks, timeLogs]);
+  const localPartitionUserId = firebaseUser?.uid ?? "local-device";
+  const offlineReliability = useOfflineReliability(localPartitionUserId, offlineCollections, syncState === "saved" ? "synced" : syncState, allLocalDataHydrated);
 
   useEffect(() => {
     if (!firebaseUser || !allLocalDataHydrated || !navigator.onLine || syncInitialized) return;
@@ -2360,9 +2858,47 @@ export default function PlannerAppV2() {
           if (typeof remotePreferences.checklistNote === "string") setChecklistNote(remotePreferences.checklistNote);
         }
 
-        const remoteTasks = await loadUserTasks(firebaseUser.uid);
+        const [remoteTasks, remoteAvailability, remoteTemplates, remoteSessions, remoteScheduleBlocks, remoteTimeLogs, remoteNotifications, remoteReminders, remoteNotificationSettings, remoteCalendar, remoteAssistant, remoteProjectPlanning, remoteRecurrence] = await Promise.all([
+          loadUserTasks(firebaseUser.uid),
+          loadUserAvailability(firebaseUser.uid),
+          loadUserAvailabilityTemplates(firebaseUser.uid),
+          loadUserTaskSessions(firebaseUser.uid),
+          loadUserScheduleBlocks(firebaseUser.uid),
+          loadUserTimeLogs(firebaseUser.uid),
+          loadUserNotifications(firebaseUser.uid),
+          loadUserReminders(firebaseUser.uid),
+          loadUserNotificationSettings(firebaseUser.uid),
+          loadUserCalendarData(firebaseUser.uid),
+          loadUserAssistantData(firebaseUser.uid),
+          loadUserProjectPlanning(firebaseUser.uid),
+          loadUserRecurrenceData(firebaseUser.uid),
+        ]);
         if (currentUserIdRef.current !== firebaseUser.uid) return;
         setTasks((localTasks) => mergeTaskCopies(localTasks, remoteTasks));
+        setAvailability((localBlocks) => mergeAvailabilityData(localBlocks, remoteAvailability.blocks));
+        setAvailabilityOverrides((localOverrides) => mergeOverrideCopies(localOverrides, remoteAvailability.overrides));
+        setAvailabilityTemplates((localTemplates) => mergeAvailabilityTemplateData(localTemplates, remoteTemplates));
+        setTaskSessions((localSessions) => mergeTaskSessionData(localSessions, remoteSessions));
+        setScheduleBlocks((localBlocks) => mergeScheduleBlockData(localBlocks, remoteScheduleBlocks));
+        setTimeLogs((localLogs) => mergeTimeLogData(localLogs, remoteTimeLogs));
+        setNotifications((localItems) => mergeNotificationData(localItems, remoteNotifications));
+        setReminders((localItems) => mergeReminderData(localItems, remoteReminders));
+        if (remoteNotificationSettings) setNotificationSettings((local) =>
+          remoteNotificationSettings.updatedAt > local.updatedAt ? remoteNotificationSettings : local);
+        if (remoteCalendar.connection) setCalendarConnection((local) => remoteCalendar.connection!.updatedAt > local.updatedAt ? remoteCalendar.connection! : local);
+        if (remoteCalendar.settings) setCalendarSettings((local) => remoteCalendar.settings!.updatedAt > local.updatedAt ? remoteCalendar.settings! : local);
+        setCalendarSyncRecords((local) => mergeCalendarSyncRecordData(local, remoteCalendar.records));
+        if (remoteAssistant.settings) setAISettings((local) => remoteAssistant.settings!.updatedAt > local.updatedAt ? remoteAssistant.settings! : local);
+        setAssistantMessages((local) => mergeAssistantMessageData(local, remoteAssistant.messages));
+        setAssistantAudits((local) => mergeAssistantAuditData(local, remoteAssistant.audits));
+        setGoals((local) => mergeGoalData(local, remoteProjectPlanning.goals));
+        setPlanningProjects((local) => mergeProjectData(local, remoteProjectPlanning.projects));
+        setMilestones((local) => mergeMilestoneData(local, remoteProjectPlanning.milestones));
+        setTaskDependencies((local) => mergeDependencyData(local, remoteProjectPlanning.dependencies));
+        setRecurrenceDefinitions((local) => mergeRecurrenceDefinitionData(local, remoteRecurrence.definitions));
+        setRecurrenceOccurrences((local) => mergeRecurrenceOccurrenceData(local, remoteRecurrence.occurrences));
+        setRecurrenceExceptions((local) => mergeRecurrenceExceptionData(local, remoteRecurrence.exceptions));
+        setRoutineTemplates((local) => mergeRoutineTemplateData(local, remoteRecurrence.templates));
         setSyncInitialized(true);
         setSyncState("saved");
         setSyncErrorMessage(null);
@@ -2377,7 +2913,7 @@ export default function PlannerAppV2() {
     };
 
     void initializeSync();
-  }, [allLocalDataHydrated, firebaseUser, preferences, syncInitialized, syncRetry, tasks]);
+  }, [aiSettings, allLocalDataHydrated, assistantAudits, assistantMessages, availability, availabilityOverrides, availabilityTemplates, calendarConnection, calendarSettings, calendarSyncRecords, firebaseUser, goals, milestones, notificationSettings, notifications, planningProjects, preferences, recurrenceDefinitions, recurrenceExceptions, recurrenceOccurrences, reminders, routineTemplates, scheduleBlocks, syncInitialized, syncRetry, taskDependencies, taskSessions, tasks, timeLogs]);
 
   useEffect(() => {
     if (!firebaseUser || !syncInitialized) return;
@@ -2390,7 +2926,21 @@ export default function PlannerAppV2() {
       setSyncErrorMessage(null);
       syncQueueRef.current = syncQueueRef.current
         .catch(() => undefined)
-        .then(() => syncUserData(firebaseUser.uid, tasks, preferences))
+        .then(() => Promise.all([
+          syncUserData(firebaseUser.uid, tasks, preferences),
+          syncUserAvailability(firebaseUser.uid, availability, availabilityOverrides),
+          syncUserAvailabilityTemplates(firebaseUser.uid, availabilityTemplates),
+          syncUserTaskSessions(firebaseUser.uid, taskSessions),
+          syncUserScheduleBlocks(firebaseUser.uid, scheduleBlocks),
+          syncUserTimeLogs(firebaseUser.uid, timeLogs),
+          syncUserNotifications(firebaseUser.uid, notifications),
+          syncUserReminders(firebaseUser.uid, reminders),
+          syncUserNotificationSettings(firebaseUser.uid, notificationSettings),
+          syncUserCalendarData(firebaseUser.uid, calendarConnection, calendarSettings, calendarSyncRecords),
+          syncUserAssistantData(firebaseUser.uid, aiSettings, assistantMessages, assistantAudits),
+          syncUserProjectPlanning(firebaseUser.uid, goals, planningProjects, milestones, taskDependencies),
+          syncUserRecurrenceData(firebaseUser.uid, recurrenceDefinitions, recurrenceOccurrences, recurrenceExceptions, routineTemplates),
+        ]))
         .then(() => {
           setSyncState("saved");
           setSyncErrorMessage(null);
@@ -2402,7 +2952,28 @@ export default function PlannerAppV2() {
         });
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [firebaseUser, preferences, syncInitialized, syncRetry, tasks]);
+  }, [aiSettings, assistantAudits, assistantMessages, availability, availabilityOverrides, availabilityTemplates, calendarConnection, calendarSettings, calendarSyncRecords, firebaseUser, goals, milestones, notificationSettings, notifications, planningProjects, preferences, recurrenceDefinitions, recurrenceExceptions, recurrenceOccurrences, reminders, routineTemplates, scheduleBlocks, syncInitialized, syncRetry, taskDependencies, taskSessions, tasks, timeLogs]);
+
+  useEffect(() => {
+    if (!allLocalDataHydrated) return;
+    const now = new Date().toISOString();
+    const result = evaluateNotifications({
+      now, tasks, sessions: taskSessions, scheduleBlocks, availability: plannerAvailability,
+      overrides: availabilityOverrides, timeLogs, reminders, notifications,
+      settings: notificationSettings,
+    });
+    let nextNotifications = result.notifications;
+    if (result.browserDeliveries.length && typeof window !== "undefined" && "Notification" in window && window.Notification.permission === "granted") {
+      const delivered = new Set(result.browserDeliveries.map((item) => item.id));
+      for (const item of result.browserDeliveries) {
+        const browserNotification = new window.Notification(item.title, { body: item.message, tag: item.deduplicationKey });
+        browserNotification.onclick = () => { window.focus(); setView(item.action?.type === "open-timer" ? "planning" : item.action?.type === "open-daily-plan" ? "daily" : "planning"); };
+      }
+      nextNotifications = nextNotifications.map((item) => delivered.has(item.id) ? { ...item, browserDeliveredAt: now, updatedAt: now } : item);
+    }
+    if (JSON.stringify(nextNotifications) !== JSON.stringify(notifications)) setNotifications(nextNotifications);
+    if (JSON.stringify(result.reminders) !== JSON.stringify(reminders)) setReminders(result.reminders);
+  }, [allLocalDataHydrated, availabilityOverrides, notificationMinute, notificationSettings, notifications, plannerAvailability, reminders, scheduleBlocks, taskSessions, tasks, timeLogs]);
 
   const toggleTask = (id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? completeTask(t) : t)));
@@ -2411,7 +2982,7 @@ export default function PlannerAppV2() {
   const activeTasks = tasks.filter((task) => task.status !== "archived");
 
   const exportBackup = () => {
-    const backup = createPlannerBackup(tasks, preferences);
+    const backup = createPlannerBackup(tasks, preferences, undefined, availability, availabilityOverrides, availabilityTemplates, taskSessions, scheduleBlocks, timeLogs, notifications, reminders, notificationSettings, calendarConnection, calendarSettings, calendarSyncRecords, aiSettings, assistantMessages, assistantAudits, goals, planningProjects, milestones, taskDependencies, recurrenceDefinitions, recurrenceOccurrences, recurrenceExceptions, routineTemplates);
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -2429,7 +3000,7 @@ export default function PlannerAppV2() {
     try {
       const backup = parsePlannerBackup(await file.text());
       const confirmed = window.confirm(
-        `Import ${backup.tasks.length} task(s) from this backup? Existing tasks will be preserved and duplicates merged by stable ID.`,
+        `Import ${backup.tasks.length} task(s) and ${backup.availability.length} availability block(s) from this backup? Existing records will be preserved and duplicates merged by stable ID.`,
       );
       if (!confirmed) {
         setBackupMessage("Import cancelled. No planner data was changed.");
@@ -2440,11 +3011,53 @@ export default function PlannerAppV2() {
       setChecklistByDate(backup.preferences.checklistByDate as ChecklistMap);
       setProjects(backup.preferences.projects as ProjectItem[]);
       setChecklistNote(backup.preferences.checklistNote);
-      setBackupMessage(`Imported ${backup.tasks.length} task(s); duplicate IDs were merged.`);
+      setAvailability((current) => mergeAvailabilityCopies(current, backup.availability));
+      setAvailabilityOverrides((current) => mergeOverrideCopies(current, backup.availabilityOverrides));
+      setAvailabilityTemplates((current) => mergeTemplateCopies(current, backup.availabilityTemplates));
+      setTaskSessions((current) => mergeSessionCopies(current, backup.taskSessions));
+      setScheduleBlocks((current) => mergeScheduleBlockCopies(current, backup.scheduleBlocks));
+      setTimeLogs((current) => mergeTimeLogCopies(current, backup.timeLogs));
+      setNotifications((current) => mergeNotificationCopies(current, backup.notifications));
+      setReminders((current) => mergeReminderCopies(current, backup.reminders));
+      setNotificationSettings((current) => backup.notificationSettings.updatedAt > current.updatedAt ? backup.notificationSettings : current);
+      setCalendarConnection((current) => backup.calendarConnection.updatedAt > current.updatedAt ? backup.calendarConnection : current);
+      setCalendarSettings((current) => backup.calendarSettings.updatedAt > current.updatedAt ? backup.calendarSettings : current);
+      setCalendarSyncRecords((current) => mergeSyncRecords(current, backup.calendarSyncRecords));
+      setAISettings((current) => backup.aiSettings.updatedAt > current.updatedAt ? backup.aiSettings : current);
+      setAssistantMessages((current) => mergeAssistantMessageData(current, backup.assistantMessages));
+      setAssistantAudits((current) => mergeAssistantAuditData(current, backup.assistantActionAudits));
+      setGoals((current) => mergeGoalData(current, backup.goals));
+      setPlanningProjects((current) => mergeProjectData(current, backup.projects));
+      setMilestones((current) => mergeMilestoneData(current, backup.milestones));
+      setTaskDependencies((current) => mergeDependencyData(current, backup.taskDependencies));
+      setRecurrenceDefinitions((current) => mergeRecurrenceDefinitionData(current, backup.recurrenceDefinitions));
+      setRecurrenceOccurrences((current) => mergeRecurrenceOccurrenceData(current, backup.recurrenceOccurrences));
+      setRecurrenceExceptions((current) => mergeRecurrenceExceptionData(current, backup.recurrenceExceptions));
+      setRoutineTemplates((current) => mergeRoutineTemplateData(current, backup.routineTemplates));
+      setBackupMessage(`Imported ${backup.tasks.length} task(s) and ${backup.availability.length} availability block(s); duplicate IDs were merged.`);
     } catch (error) {
       console.error("Planner backup import failed", error);
       setBackupMessage(error instanceof Error ? `Import failed: ${error.message}` : "Import failed: invalid backup file.");
     }
+  };
+
+  const requestStartTimer = (input: Omit<TimerStartInput, "id">) => {
+    setTimeLogs((current) => {
+      const running = runningTimeLogs(current);
+      let next = current;
+      if (running.length) {
+        const currentTask = tasks.find((task) => task.id === running[0]!.taskId);
+        const choice = window.prompt(`Another timer is already active for ${currentTask?.title ?? "another task"}. Type "save", "pause", or "keep".`, "keep")?.trim().toLowerCase();
+        if (choice === "pause") next = current.map((log) => log.id === running[0]!.id ? pauseTimer(log) : log);
+        else if (choice === "save") {
+          const seconds = elapsedSeconds(running[0]!, new Date().toISOString());
+          if (seconds <= 0) return current;
+          next = current.map((log) => log.id === running[0]!.id ? completeTimer(log) : log);
+        } else return current;
+      }
+      return [...next, createTimerLog({ ...input, userId: firebaseUser?.uid })];
+    });
+    setTimerRecovered(false);
   };
 
   return (
@@ -2466,13 +3079,21 @@ export default function PlannerAppV2() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:max-w-[calc(100%-12rem)] sm:justify-end sm:pl-6 lg:pl-10">
             {(
               [
                 { key: "daily", label: "Daily" },
                 { key: "weekly", label: "Weekly" },
+                { key: "planning", label: "Planning" },
+                { key: "availability", label: "Availability" },
+                { key: "projects", label: "Projects & Goals" },
+                { key: "routines", label: "Routines" },
+                { key: "insights", label: "Insights" },
+                { key: "assistant", label: "Assistant" },
+                { key: "notifications", label: `Notifications${notifications.some((item) => item.status === "delivered") ? ` (${notifications.filter((item) => item.status === "delivered").length})` : ""}` },
                 { key: "monthly", label: "Monthly" },
                 { key: "google", label: "Google" },
+                { key: "sync", label: "Sync & Storage" },
                 { key: "checklist", label: "Checklist" },
                 { key: "archive", label: "Archive" },
                 { key: "history", label: "History" },
@@ -2481,15 +3102,18 @@ export default function PlannerAppV2() {
               <Button
                 key={b.key}
                 onClick={() => setView(b.key)}
-                variant={view === b.key ? "default" : "outline"}
-                className={`rounded-full shadow-sm ${view === b.key ? "bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900" : "bg-white/80 text-slate-700 ring-1 ring-pink-100 hover:bg-pink-50"}`}
+                variant="outline"
+                className={`rounded-full shadow-sm ${view === b.key ? "bg-gradient-to-r from-pink-300 to-amber-200 text-slate-900 shadow hover:opacity-90" : "bg-white/80 text-slate-700 ring-1 ring-pink-100 hover:bg-pink-50"}`}
               >
                 {b.label}
               </Button>
             ))}
-            <Button variant="outline" className="rounded-full bg-white/80" onClick={exportBackup}>Export JSON</Button>
-            <Button variant="outline" className="rounded-full bg-white/80" onClick={() => backupInputRef.current?.click()}>Import JSON</Button>
-            <input ref={backupInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void importBackup(event)} aria-label="Import planner JSON backup" />
+            <SyncStatusBadge status={offlineReliability.status} onOpen={() => setView("sync")} />
+            <div className="hidden" aria-hidden="true">
+              <Button tabIndex={-1} variant="outline" onClick={exportBackup}>Export recovery backup</Button>
+              <Button tabIndex={-1} variant="outline" onClick={() => backupInputRef.current?.click()}>Import recovery backup</Button>
+              <input ref={backupInputRef} tabIndex={-1} type="file" accept="application/json,.json" onChange={(event) => void importBackup(event)} aria-label="Import planner recovery backup" />
+            </div>
             {firebaseEnabled && !authReady ? (
               <span role="status" aria-live="polite" className="rounded-full bg-white/80 px-3 py-2 text-xs text-slate-600 ring-1 ring-pink-100">
                 Cloud sync • loading
@@ -2539,6 +3163,9 @@ export default function PlannerAppV2() {
           </div>
         ) : null}
 
+        <main className={(["planning", "availability", "projects", "routines", "insights", "assistant", "notifications", "google", "sync"] as View[]).includes(view) ? "sm:pl-6 lg:pl-10" : ""}>
+        {(["daily", "weekly", "availability", "planning"] as View[]).includes(view) ? <ExternalCalendarSummary events={externalEvents} settings={calendarSettings} calendars={externalCalendars} /> : null}
+
         {view === "daily" && (
           <DailyPlanner
             tasks={activeTasks}
@@ -2549,18 +3176,83 @@ export default function PlannerAppV2() {
             setMusicQuery={setMusicQuery}
           />
         )}
-        {view === "weekly" && <WeeklyPlanner tasks={activeTasks} setTasks={setTasks} />}
+        {view === "weekly" && <WeeklyPlanner tasks={activeTasks} setTasks={setTasks} sessions={taskSessions} timeLogs={timeLogs} />}
+        {view === "planning" && <PlanningEffortPage tasks={tasks} setTasks={setTasks} sessions={taskSessions} setSessions={setTaskSessions} availability={plannerAvailability} overrides={availabilityOverrides} scheduleBlocks={scheduleBlocks} setScheduleBlocks={setScheduleBlocks} timeLogs={timeLogs} onStartTimer={requestStartTimer} />}
+        {view === "availability" && <AvailabilityPage blocks={availability} setBlocks={setAvailability} overrides={availabilityOverrides} setOverrides={setAvailabilityOverrides} templates={availabilityTemplates} setTemplates={setAvailabilityTemplates} />}
+        {view === "projects" && <ProjectsPage
+          goals={goals}
+          setGoals={setGoals}
+          projects={planningProjects}
+          setProjects={setPlanningProjects}
+          milestones={milestones}
+          setMilestones={setMilestones}
+          dependencies={taskDependencies}
+          setDependencies={setTaskDependencies}
+          tasks={tasks}
+          setTasks={setTasks}
+          sessions={taskSessions}
+          availability={plannerAvailability}
+          overrides={availabilityOverrides}
+          scheduleBlocks={scheduleBlocks}
+          timeLogs={timeLogs}
+        />}
+        {view === "routines" && <RecurrencesPage definitions={recurrenceDefinitions} setDefinitions={setRecurrenceDefinitions} occurrences={recurrenceOccurrences} setOccurrences={setRecurrenceOccurrences} exceptions={recurrenceExceptions} setExceptions={setRecurrenceExceptions} templates={routineTemplates} setTemplates={setRoutineTemplates} tasks={tasks} setTasks={setTasks} sessions={taskSessions} setSessions={setTaskSessions} scheduleBlocks={scheduleBlocks} setScheduleBlocks={setScheduleBlocks} timeLogs={timeLogs} reminders={reminders} setReminders={setReminders} projects={planningProjects} milestones={milestones} today={toISODate(new Date())} />}
+        {view === "insights" && <AnalyticsPage tasks={tasks} sessions={taskSessions} timeLogs={timeLogs} scheduleBlocks={scheduleBlocks} />}
+        {view === "assistant" && <PlanningAssistantPage
+          settings={aiSettings}
+          setSettings={setAISettings}
+          messages={assistantMessages}
+          setMessages={setAssistantMessages}
+          audits={assistantAudits}
+          setAudits={setAssistantAudits}
+          plannerState={{
+            tasks,
+            sessions: taskSessions,
+            availability: plannerAvailability,
+            overrides: availabilityOverrides,
+            scheduleBlocks,
+            timeLogs,
+            reminders,
+            externalEvents,
+            currentRoute: view,
+            today: toISODate(new Date()),
+            currentTime: `${String(new Date().getHours()).padStart(2, "0")}:${String(new Date().getMinutes()).padStart(2, "0")}`,
+            plannerVersion: "",
+          }}
+          setTasks={setTasks}
+          setSessions={setTaskSessions}
+          setReminders={setReminders}
+          onOpenPlanning={() => setView("planning")}
+        />}
+        {view === "notifications" && <NotificationCenter
+          notifications={notifications}
+          setNotifications={setNotifications}
+          reminders={reminders}
+          setReminders={setReminders}
+          settings={notificationSettings}
+          setSettings={setNotificationSettings}
+          tasks={tasks}
+          scheduleBlocks={scheduleBlocks}
+          onOpen={(item) => setView(item.action?.type === "open-timer" || item.action?.type === "open-planning-health" || item.action?.type === "replan-work" ? "planning" : "daily")}
+        />}
         {view === "monthly" && <MonthlyPlanner tasks={activeTasks} />}
-        {view === "google" && (
-          <GoogleCalendarView
-            tasks={activeTasks}
-            setTasks={setTasks}
-            accessToken={googleAccessToken}
-            setAccessToken={setGoogleAccessToken}
-            tokenClient={googleTokenClient}
-            setTokenClient={setGoogleTokenClient}
-          />
-        )}
+        {view === "google" && <CalendarIntegrationPage
+          clientId={GOOGLE_CLIENT_ID}
+          connection={calendarConnection}
+          setConnection={setCalendarConnection}
+          calendars={externalCalendars}
+          setCalendars={setExternalCalendars}
+          events={externalEvents}
+          setEvents={setExternalEvents}
+          settings={calendarSettings}
+          setSettings={setCalendarSettings}
+          records={calendarSyncRecords}
+          setRecords={setCalendarSyncRecords}
+          scheduleBlocks={scheduleBlocks}
+          tasks={tasks}
+          online={navigator.onLine}
+        />}
+        {view === "sync" && <SyncReliabilityPage database={offlineReliability.database} status={offlineReliability.status} userId={localPartitionUserId} onRefresh={offlineReliability.refresh} />}
         {view === "checklist" && (
           <ChecklistView
             rows={projects}
@@ -2569,8 +3261,10 @@ export default function PlannerAppV2() {
             setNote={setChecklistNote}
           />
         )}
-        {view === "archive" && <ArchiveView tasks={tasks} setTasks={setTasks} />}
-        {view === "history" && <HistoryView tasks={tasks} />}
+        {view === "archive" && <ArchiveView tasks={tasks} setTasks={setTasks} sessions={taskSessions} setSessions={setTaskSessions} timeLogs={timeLogs} setTimeLogs={setTimeLogs} />}
+        {view === "history" && <HistoryView tasks={tasks} sessions={taskSessions} />}
+        <FocusTimerPanel tasks={tasks} setTasks={setTasks} sessions={taskSessions} setSessions={setTaskSessions} scheduleBlocks={scheduleBlocks} setScheduleBlocks={setScheduleBlocks} logs={timeLogs} setLogs={setTimeLogs} onStart={requestStartTimer} recovered={timerRecovered} showPanel={view === "planning"} />
+        </main>
       </div>
       </div>
       <FloatingMusicPlayer musicQuery={musicQuery} />
