@@ -233,17 +233,24 @@ interface GoogleTokenClient {
 
 type View = "monthly" | "weekly" | "daily" | "planning" | "availability" | "projects" | "routines" | "insights" | "assistant" | "notifications" | "google" | "sync" | "checklist" | "archive" | "history";
 
-const sampleTasks: Task[] = migrateTasks([
-  { id: 1, title: "Học Tiếng Trung HSK3", date: "2025-08-13", time: "09:00", status: "completed", priority: "high", category: "Học ngoại ngữ" },
-  { id: 2, title: "Listening - IELTS", date: "2025-08-13", time: "11:00", status: "inProgress", priority: "medium", category: "Học ngoại ngữ" },
-  { id: 3, title: "Tập Yoga", date: "2025-08-14", time: "07:30", status: "completed", priority: "high", category: "Sức khỏe" },
-  { id: 4, title: "Nghiên cứu thị trường", date: "2025-08-14", time: "16:00", status: "todo", priority: "low", category: "Kinh doanh" },
-  { id: 5, title: "Design Kỹ năng thị giác", date: "2025-08-15", time: "14:00", status: "inProgress", priority: "medium", category: "Marketing" },
-  { id: 6, title: "Đọc sách Đầu tư", date: "2025-08-16", time: "20:00", status: "todo", priority: "low", category: "Đầu tư" },
-  { id: 7, title: "Họp CLB thiện nguyện", date: "2025-08-17", time: "17:00", status: "completed", priority: "medium", category: "CLB & tình nguyện" },
-  { id: 8, title: "Kinh tế vi mô", date: "2025-08-18", time: "08:00", status: "inProgress", priority: "high", category: "GPA năm 3" },
-  { id: 9, title: "Nấu ăn, nghỉ ngơi", date: "2025-08-18", time: "18:00", status: "todo", priority: "low", category: "Kỹ năng sống" },
+const BUNDLED_DEMO_TASK_IDS = new Set(
+  Array.from({ length: 9 }, (_, index) => `legacy-${index + 1}`),
+);
+const BUNDLED_DEMO_TASK_TITLES = new Set([
+  "nt tax",
+  "pacific bay",
+  "nt tax and pacific bay",
+  "nt tax & pacific bay",
+  "waxing",
+  "waxing completed",
 ]);
+
+function withoutBundledDemoTasks(tasks: Task[]): Task[] {
+  return tasks.filter((task) => {
+    const normalizedTitle = task.title.trim().toLocaleLowerCase();
+    return !BUNDLED_DEMO_TASK_IDS.has(task.id) && !BUNDLED_DEMO_TASK_TITLES.has(normalizedTitle);
+  });
+}
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 const TASKS_STORAGE_KEY = "planner_tasks_v1";
@@ -2101,9 +2108,14 @@ function formatTimestamp(value: string | null | undefined) {
 }
 
 function lifecycleDate(task: Task) {
-  return task.status === "archived"
-    ? task.archivedAt ?? task.completedAt ?? `${task.date}T${task.time}`
-    : task.completedAt ?? `${task.date}T${task.time}`;
+  const usableTimestamp = (value: string | null | undefined) =>
+    value && !value.startsWith("1970-01-01") ? value : undefined;
+  const recordedLifecycleDate =
+    usableTimestamp(task.completedAt) ?? usableTimestamp(task.archivedAt);
+  if (recordedLifecycleDate) return recordedLifecycleDate;
+
+  const plannerDate = task.date || task.dueDate || task.updatedAt.slice(0, 10);
+  return `${plannerDate}T${task.time || task.dueTime || "00:00"}`;
 }
 
 function TaskDetailsDialog({ task, onClose, sessions = [] }: { task: Task | null; onClose: () => void; sessions?: TaskSession[] }) {
@@ -2341,22 +2353,29 @@ function HistoryView({ tasks, sessions }: { tasks: Task[]; sessions: TaskSession
             <div className="text-sm text-slate-500">No completed or archived tasks in this month.</div>
           ) : (
             <div className="space-y-2">
-              {monthTasks.map((task) => (
-                <button
-                  type="button"
-                  key={task.id}
-                  onClick={() => setSelectedTask(task)}
-                  className="flex w-full flex-col gap-1 rounded-2xl bg-white/70 px-4 py-3 text-left ring-1 ring-slate-100 transition-colors hover:bg-pink-50/50"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-slate-700">{task.title}</span>
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-pink-100">{task.status}</span>
-                  </div>
-                  <div className="text-xs text-slate-500">Estimate: {formatEffortMinutes(task.estimatedMinutes)}{task.actualMinutes === undefined ? "" : ` • Actual: ${formatEffortMinutes(task.actualMinutes)}`}</div>
-                  <span className="text-xs text-slate-500">{task.date} • {task.category} • {task.priority}</span>
-                  {task.note ? <span className="line-clamp-2 text-xs text-slate-600">{task.note}</span> : null}
-                </button>
-              ))}
+              {monthTasks.map((task) => {
+                const historyDate = lifecycleDate(task).slice(0, 10);
+                const lifecycleLabel = task.completedAt ? "Completed" : "Archived";
+                return (
+                  <button
+                    type="button"
+                    key={task.id}
+                    onClick={() => setSelectedTask(task)}
+                    className="flex w-full flex-col gap-1 rounded-2xl bg-white/70 px-4 py-3 text-left ring-1 ring-slate-100 transition-colors hover:bg-pink-50/50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-slate-700">{task.title}</span>
+                      <span className="rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-slate-600 ring-1 ring-pink-100">{task.status}</span>
+                    </div>
+                    <div className="text-xs font-medium text-slate-600">{lifecycleLabel} {historyDate}</div>
+                    <div className="text-xs text-slate-500">Estimate: {formatEffortMinutes(task.estimatedMinutes)}{task.actualMinutes === undefined ? "" : ` • Actual: ${formatEffortMinutes(task.actualMinutes)}`}</div>
+                    <span className="text-xs text-slate-500">
+                      {task.date && task.date !== historyDate ? `Scheduled ${task.date} • ` : ""}{task.category} • {task.priority}
+                    </span>
+                    {task.note ? <span className="line-clamp-2 text-xs text-slate-600">{task.note}</span> : null}
+                  </button>
+                );
+              })}
             </div>
           )}
         </section>
@@ -2368,7 +2387,7 @@ function HistoryView({ tasks, sessions }: { tasks: Task[]; sessions: TaskSession
 
 export default function PlannerAppV2() {
   const [view, setView] = useState<View>("daily");
-  const [tasks, setTasks] = useState<Task[]>(sampleTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [checklistByDate, setChecklistByDate] = useState<ChecklistMap>({});
   const [checklistHydrated, setChecklistHydrated] = useState(false);
@@ -2442,7 +2461,7 @@ export default function PlannerAppV2() {
     }
     try {
       const parsed: unknown = JSON.parse(raw);
-      setTasks(migrateTasks(parsed));
+      setTasks(withoutBundledDemoTasks(migrateTasks(parsed)));
       setHydrated(true);
     } catch (err) {
       console.error("Failed to parse or migrate saved tasks; original storage was preserved", err);
@@ -2874,7 +2893,7 @@ export default function PlannerAppV2() {
           loadUserRecurrenceData(firebaseUser.uid),
         ]);
         if (currentUserIdRef.current !== firebaseUser.uid) return;
-        setTasks((localTasks) => mergeTaskCopies(localTasks, remoteTasks));
+        setTasks((localTasks) => withoutBundledDemoTasks(mergeTaskCopies(localTasks, remoteTasks)));
         setAvailability((localBlocks) => mergeAvailabilityData(localBlocks, remoteAvailability.blocks));
         setAvailabilityOverrides((localOverrides) => mergeOverrideCopies(localOverrides, remoteAvailability.overrides));
         setAvailabilityTemplates((localTemplates) => mergeAvailabilityTemplateData(localTemplates, remoteTemplates));
