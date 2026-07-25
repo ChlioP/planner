@@ -296,6 +296,17 @@ const BUNS_GOOGLE = [bun8, bun9, bun10, bun11];
 const BUNS_CHECKLIST = [bun12, bun13, bun14, bun15];
 const BUNS_WEEKLY = [bun17, bun18, bun19, bun20];
 const BUNS_MONTHLY = [bun0, bun1, bun2, bun3];
+const NAV_PAGE_BUNS: Partial<Record<View, string[]>> = {
+  planning: BUNS_WEEKLY,
+  availability: BUNS_DAILY,
+  projects: BUNS_CHECKLIST,
+  routines: BUNS_MONTHLY,
+  insights: BUNS_WEEKLY,
+  assistant: BUNS_DAILY,
+  notifications: BUNS_CHECKLIST,
+  google: BUNS_GOOGLE,
+  sync: BUNS_MONTHLY,
+};
 const DEFAULT_WEATHER_LOCATION = { lat: 16.0544, lon: 108.2022, label: "Da Nang, Vietnam" };
 
 function writeLocalStorage(key: string, value: string) {
@@ -3078,6 +3089,7 @@ export default function PlannerAppV2() {
     });
     setTimerRecovered(false);
   };
+  const navPageBuns = NAV_PAGE_BUNS[view];
 
   return (
     <div className="min-h-screen p-4 sm:p-6 relative">
@@ -3183,6 +3195,7 @@ export default function PlannerAppV2() {
         ) : null}
 
         <main className={(["planning", "availability", "projects", "routines", "insights", "assistant", "notifications", "google", "sync"] as View[]).includes(view) ? "sm:pl-6 lg:pl-10" : ""}>
+        {navPageBuns ? <div className="mb-4 px-4"><BunStrip imgs={navPageBuns} /></div> : null}
         {(["daily", "weekly", "availability", "planning"] as View[]).includes(view) ? <ExternalCalendarSummary events={externalEvents} settings={calendarSettings} calendars={externalCalendars} /> : null}
 
         {view === "daily" && (
